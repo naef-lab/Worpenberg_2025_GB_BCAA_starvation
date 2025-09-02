@@ -1,0 +1,6 @@
+# Ignore oversized datasets
+General_datasets/datatable_Riboseq_normalized.RData
+Figure_6_Peak calling_Stalling site distribution/Data/Leu_FC_stalling.RData
+Figure_6_Peak calling_Stalling site distribution/Data/Val_FC_stalling.RData
+Figure_6_Peak calling_Stalling site distribution/Data/Double_FC_stalling.RData
+Figure_6_Peak calling_Stalling site distribution/Data/Triple_FC_stalling.RData
