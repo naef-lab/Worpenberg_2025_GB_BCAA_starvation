@@ -1,0 +1,81 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-08-13"
+---
+
+```{r}
+# OPP controls, OPP quantification, Polysome profiles and quantifications
+load("./Figures/violin_OPP_controls.RData")
+load("./Figures/OPP_6h_untreated.RData")
+load("./Figures/Plots_profiles.RData")
+load("./Figures/Poysome_quantification_Graphs_ratio.RData")
+load("./Figures/Proteome_counts.RData")
+
+##Scatterplots Proteomevs Riboseq
+load("./Figures/Proteome_vs_RPF_Val.RData")
+load("./Figures/Proteome_vs_RPF_Ile.RData")
+load("./Figures/Proteome_vs_RPF_Leu.RData")
+load("./Figures/Proteome_vs_RPF_Double.RData")
+load("./Figures/Proteome_vs_RPF_Triple.RData")
+
+
+## Plots degradation time
+load("./Figures/Boxplot_halflifes.RData")
+load("./Figures/Degradation_correlation_Val.RData")
+```
+
+```{r}
+library(patchwork)
+T1 <- theme(
+  text = element_text(size = 14, family = "Arial", color = "black"),
+  axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 14, family = "Arial", color = "black"),
+  axis.text.y = element_text(size = 14, family = "Arial", color = "black"),
+  axis.title = element_blank(),
+  plot.title = element_text(size = 14, family = "Arial", color = "black", hjust = 0.5)
+)
+
+T2 <- theme(
+  text = element_text(size = 14, family = "Arial", color = "black"),
+  axis.text.x = element_text(hjust = 1, vjust = 0.5, size = 14, family = "Arial", color = "black"),
+  axis.text.y = element_text(size = 14, family = "Arial", color = "black"),
+  axis.title = element_text(size = 14, family = "Arial", color = "black"),
+  plot.title = element_text(size = 14, family = "Arial", color = "black", hjust = 0.5)
+)
+
+T3 <- theme(
+  text = element_text(size = 14, family = "Arial", color = "black"),
+  axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 14, family = "Arial", color = "black"),
+  axis.text.y = element_text(size = 14, family = "Arial", color = "black"),
+  axis.title = element_text(size = 14, family = "Arial", color = "black"),
+  plot.title = element_text(size = 14, family = "Arial", color = "black", hjust = 0.5)
+)
+
+design <- "
+  ######AABBBB
+  CCCCCCCCCCCC
+  DDDDEEEEFFFF
+  GGGHHHIIIJJJ
+  KKKLLLMMMNNN
+"
+figure_1 <- 
+  violin_OPP_controls+ T1+ggtitle("Controls")+
+  violin_untreated_OPP + T1+ggtitle("Starvations")+
+  polysome_profiles_with_legend + T2+ ggtitle("Polysome profiles: Starvation vs control")+
+  M_P_Ratio + T1 + ggtitle("MS/PS ratio")+
+  Monosome+ T1 + ggtitle("Monosome")+
+  Polysome+ T1 + ggtitle("Polysome")+
+  Protein_count+ T1 + ggtitle("Dysregulated proteins")+
+  Proteome_vs_RPF_Leu+ T2+ ggtitle("-Leu")+
+  Proteome_vs_RPF_Ile+ T2+ ggtitle("-Ile")+
+  Proteome_vs_RPF_Val+ T2+ ggtitle("-Val")+
+  Proteome_vs_RPF_Double+ T2+ ggtitle("Double")+
+  Proteome_vs_RPF_Triple+ T2+ ggtitle("Triple")+
+  box_halflife+ T2+ggtitle("protein halflifes")+
+  plot_Val1+T2+ggtitle("")+
+  plot_layout(design = design)
+
+ggsave(filename = "./Figure_3.svg", plot = figure_1, width = 14, height = 16, units = "in", dpi = 300)
+ggsave(filename = "./Figure_3.png", plot = figure_1, width = 14, height = 16, units = "in", dpi = 300)
+```
+

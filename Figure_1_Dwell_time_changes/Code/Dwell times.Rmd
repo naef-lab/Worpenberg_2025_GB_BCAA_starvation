@@ -1,0 +1,575 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+#Load data single dwell times (P:A_coef)
+```{r}
+library(readxl)
+library(dplyr)
+dwell <- read_excel("../Data/summary_single_DT.xlsx", 
+    col_types = c("numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "numeric", "text", "text", "text", "text"))
+
+dwell <- as.data.frame(dwell)
+dwell <- dwell %>%
+  select(-starts_with("Nag_"))
+
+dwell$codon <- gsub("T", "U", dwell$codon)
+dwell$name <- gsub("T", "U", dwell$name)
+```
+
+## Calculate mean values and p-values over multiple positions
+```{r}
+library(dplyr)
+library(ggrepel)
+
+calculate_means <- function(dataframe, pattern) {
+  cols <- grep(pattern, names(dataframe), value = TRUE)
+  rowMeans(dataframe[, cols], na.rm = TRUE)
+}
+conditions <- c("CTRL", "DOUBLE", "ILE", "LEU", "TRIPLE", "VAL")
+result_df <- dwell %>% select(aa, codon, pos, name)
+
+for(condition in conditions) {
+  pattern <- paste0("Lina_", condition, "_[1-3]")
+  result_df[[condition]] <- calculate_means(dwell, pattern)
+}
+
+dwell_filtered <- result_df %>%
+  filter(pos %in% c("-2","-1", "E", "P", "A", "3", "4")) %>%
+  select(-pos, -name)%>%
+  group_by(codon) %>%
+  mutate(across(c(CTRL, DOUBLE, ILE, LEU, TRIPLE, VAL), mean, na.rm = TRUE)) %>%
+  ungroup() %>%
+  distinct(codon, .keep_all = TRUE)
+
+##p-value calculation
+library(tidyr)
+library(dplyr)
+
+dwell_long <- dwell %>%
+  filter(pos %in% c("-2","-1", "E", "A", "P", "3", "4"))%>%
+  pivot_longer(
+    cols = starts_with("Lina_"), 
+    names_to = "condition", 
+    names_prefix = "Lina_", 
+    values_to = "dwell_time"
+  ) %>%
+  mutate(condition = factor(gsub("_[0-9]+$", "", condition)))
+
+results <- list()
+unique_codons <- unique(dwell_long$codon)
+for(codon in unique_codons){
+    dwell_long_subset <- dwell_long %>% filter(codon == !!codon)
+    if(nrow(dwell_long_subset) > 2 && length(unique(dwell_long_subset$condition)) > 1) {
+      model <- aov(dwell_time ~ condition, data = dwell_long_subset)
+      post_hoc <- TukeyHSD(model)
+      results[[paste(codon, sep = "_")]] <- post_hoc
+    } else {
+      results[[paste(codon, sep = "_")]] <- NA
+    }
+  }
+
+final_results <- data.frame(codon = character(),p_adj_LEU = numeric(),p_adj_ILE = numeric(),p_adj_VAL = numeric(),p_adj_DOUBLE = numeric(),p_adj_TRIPLE = numeric(),stringsAsFactors = FALSE)
+
+for(key in names(results)){
+  if(!is.na(results[[key]])){
+    codon <- key
+    
+    p_adj_LEU <- NA
+    p_adj_ILE <- NA
+    p_adj_VAL <- NA
+    p_adj_DOUBLE <- NA
+    p_adj_TRIPLE <- NA
+    
+    post_hoc <- results[[key]]
+    comparisons <- post_hoc$`condition`[, "p adj"]
+    comparison_names <- rownames(post_hoc$`condition`)
+    
+    for(comp in c("LEU-CTRL", "ILE-CTRL", "VAL-CTRL", "DOUBLE-CTRL", "TRIPLE-CTRL")){
+      comp_index <- grep(comp, comparison_names)
+      if(length(comp_index) > 0){
+        p_value <- comparisons[comp_index]
+        if(comp == "LEU-CTRL") p_adj_LEU <- p_value
+        if(comp == "ILE-CTRL") p_adj_ILE <- p_value
+        if(comp == "VAL-CTRL") p_adj_VAL <- p_value
+        if(comp == "DOUBLE-CTRL") p_adj_DOUBLE <- p_value
+        if(comp == "TRIPLE-CTRL") p_adj_TRIPLE <- p_value
+      }
+    }
+  
+    final_results <- rbind(final_results, data.frame(
+      codon = codon, 
+      p_adj_LEU = p_adj_LEU, 
+      p_adj_ILE = p_adj_ILE,
+      p_adj_VAL = p_adj_VAL, 
+      p_adj_DOUBLE = p_adj_DOUBLE, 
+      p_adj_TRIPLE = p_adj_TRIPLE
+    ))
+  }
+}
+
+dwell_filtered <- merge(dwell_filtered, final_results, by = "codon", all.x = TRUE)
+rm(final_results, dwell_long, dwell_long_subset, post_hoc, results, model)
+```
+
+
+## Scatter plots with mean dwell time with significant upregulations labeled
+```{r}
+create_scatter_plot <- function(data, codons_to_highlight, x_col, y_col, colors_hex, title_text, p_adj_col) {
+  data <- data %>%
+    mutate(
+      color = case_when(
+        codon %in% codons_to_highlight ~ colors_hex[match(codon, names(colors_hex))],
+        TRUE ~ "black"
+      ),
+      size = ifelse(codon %in% codons_to_highlight, 4, 2) 
+    )
+
+  data <- data %>%
+    arrange(ifelse(codon %in% codons_to_highlight, 1, 0))
+  
+  scatter_plot <- ggplot(data, aes_string(x = x_col, y = y_col)) +
+    geom_point(aes(fill = color, size = size), shape = 21) + 
+    scale_fill_identity() +
+    scale_size_identity() +
+    geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
+    labs(title = title_text,
+         x = paste("DTs (", str_to_title(x_col), ", log2)", sep = ""),
+         y = paste("DTs (-", str_to_title(y_col), ", log2)", sep = "")) +
+    geom_text_repel(
+      data = data %>% filter((!!sym(p_adj_col)) < 0.01 & ((!!sym(y_col)) - (!!sym(x_col))) > 0), 
+      aes(label = codon), vjust = -1, color = "black", max.overlaps = Inf,
+      nudge_y = 0.1, segment.color = "grey50", segment.size = 0.5, size = 4 ) +
+    scale_x_continuous(limits = c(-0.8, 0.6)) +
+    scale_y_continuous(limits = c(-0.8, 0.8)) +
+    theme_classic(base_family = "Arial") +
+    theme(plot.background = element_rect(fill = "transparent", colour = NA),
+          panel.background = element_rect(fill = "transparent", colour = NA),
+          axis.ticks = element_line(colour = "black"),
+          axis.title = element_text(size = 14, face = "plain", color = "black"),
+          axis.text = element_text(size = 14, face = "plain", color = "black"),
+          legend.title = element_text(size = 14, color = "black", face = "plain"),
+          legend.background = element_rect(fill = "transparent", colour = NA),
+          legend.text = element_text(size = 14, color = "black", face = "plain"),
+          plot.title = element_text(size = 14, color = "black", face = "plain"))
+    
+  
+  return(scatter_plot)
+}
+
+custom_colors <- c(
+  "UUA" = "olivedrab", "UUG" = "limegreen", "CUU" = "mediumseagreen",
+  "CUC" = "greenyellow", "CUA" = "green", "CUG" = "darkolivegreen", 
+  "AUU" = "#339999", "AUC" = "#377EB8", "AUA" = "#0066FF", 
+  "GUU" = "darkorange4", "GUG" = "gold", "GUC" = "chocolate", "GUA" = "#FF7F00"
+)
+
+plot_params <- list(
+  list(codons = c("GUU", "GUG", "GUC", "GUA"), y_col = "VAL", title = "Ctrl vs -Val", p_adj_col = "p_adj_VAL"),
+  list(codons = c("UUA", "UUG", "CUU", "CUC", "CUA", "CUG"), y_col = "LEU", title = "Ctrl vs -Leu", p_adj_col = "p_adj_LEU"),
+  list(codons = c("AUU", "AUC", "AUA"), y_col = "ILE", title = "Ctrl vs -Ile", p_adj_col = "p_adj_ILE"),
+  list(codons = c("AUU", "AUC", "AUA", "UUA", "UUG", "CUU", "CUC", "CUA", "CUG"), y_col = "DOUBLE", title = "Ctrl vs Double", p_adj_col = "p_adj_DOUBLE"),
+  list(codons = c("GUU", "GUG", "GUC", "GUA", "AUU", "AUC", "AUA", "UUA", "UUG", "CUU", "CUC", "CUA", "CUG"), y_col = "TRIPLE", title = "Ctrl vs Triple", p_adj_col = "p_adj_TRIPLE")
+)
+
+scatter_plots <- lapply(plot_params, function(param) {
+  create_scatter_plot(dwell_filtered, param$codons, "CTRL", param$y_col, custom_colors, param$title, param$p_adj_col)
+})
+
+DT_scatter_Val <- scatter_plots[[1]]
+DT_scatter_Leu <- scatter_plots[[2]]
+DT_scatter_Ile <- scatter_plots[[3]]
+DT_scatter_Double <- scatter_plots[[4]]
+DT_scatter_Triple <- scatter_plots[[5]]
+
+plot_size <- 3
+ggsave(filename = file.path("../Figures/DT_scatter_Val.svg"), plot = DT_scatter_Val, width = plot_size, height = plot_size, units = "in", dpi = 300)
+ggsave(filename = file.path("../Figures/DT_scatter_Leu.svg"), plot = DT_scatter_Leu, width = plot_size, height = plot_size, units = "in", dpi = 300)
+ggsave(filename = file.path("../Figures/DT_scatter_Ile.svg"), plot = DT_scatter_Ile, width = plot_size, height = plot_size, units = "in", dpi = 300)
+ggsave(filename = file.path("../Figures/DT_scatter_Double.svg"), plot = DT_scatter_Double, width = plot_size, height = plot_size, units = "in", dpi = 300)
+ggsave(filename = file.path("../Figures/DT_scatter_Triple.svg"), plot = DT_scatter_Triple, width = plot_size, height = plot_size, units = "in", dpi = 300)
+
+ggsave(filename = file.path("../Figures/DT_scatter_Val.tiff"), plot = DT_scatter_Val, width = plot_size, height = plot_size, units = "in", dpi = 300)
+ggsave(filename = file.path("../Figures/DT_scatter_Leu.tiff"), plot = DT_scatter_Leu, width = plot_size, height = plot_size, units = "in", dpi = 300)
+ggsave(filename = file.path("../Figures/DT_scatter_Ile.tiff"), plot = DT_scatter_Ile, width = plot_size, height = plot_size, units = "in", dpi = 300)
+ggsave(filename = file.path("../Figures/DT_scatter_Double.tiff"), plot = DT_scatter_Double, width = plot_size, height = plot_size, units = "in", dpi = 300)
+ggsave(filename = file.path("../Figures/DT_scatter_Triple.tiff"), plot = DT_scatter_Triple, width = plot_size, height = plot_size, units = "in", dpi = 300)
+
+save(DT_scatter_Leu, DT_scatter_Ile, DT_scatter_Val, DT_scatter_Double, DT_scatter_Triple, file = "../Figures/Dwell_times_scatter_plots.RData")
+rm(list = setdiff(ls(), c("dwell", "dwell_filtered")))
+```
+
+
+## Dwell times as heatmap with position specificity for Leu, Ile, Val codons!
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# mean values for positions (as above)
+calculate_means <- function(dataframe, pattern) {
+  cols <- grep(pattern, names(dataframe), value = TRUE)
+  rowMeans(dataframe[, cols], na.rm = TRUE)
+}
+conditions <- c("CTRL", "DOUBLE", "ILE", "LEU", "TRIPLE", "VAL")
+result_df <- dwell %>% select(aa, codon, pos, name)
+for(condition in conditions) {
+  pattern <- paste0("Lina_", condition, "_[1-3]")
+  result_df[[condition]] <- calculate_means(dwell, pattern)
+}
+
+#HEATMAPS
+custom_order <- c(-14:-1, "E", "P", "A", 1:18)
+create_heatmap <- function(column_name, df, custom_order, limits) {
+  df_filtered <- df %>%
+    dplyr::select(name, pos, !!sym(column_name)) %>%
+    dplyr::rename(value = !!sym(column_name)) %>%
+    mutate(name = sub("\\)[^)]*$", ")", name)) %>%
+    filter(grepl("Leu", name) | grepl("Ile", name) | grepl("Val", name)) %>%
+    filter(pos %in% custom_order) %>%
+    mutate(pos = factor(pos, levels = custom_order),name = factor(name, levels = unique(name)))
+  
+  my_palette <- colorRampPalette(c("darkred", "white", "darkblue"))(100)
+  
+  heat <- ggplot(df_filtered, aes(x = name, y = pos, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradientn(
+    colors = my_palette,
+    limits = limits,
+    oob = scales::squish,
+    breaks = seq(limits[1], limits[2], length.out = 3),
+    labels = round(seq(limits[1], limits[2], length.out = 3), 1)
+  ) +
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.title = element_text(size = 14, color = "black", face = "plain", angle = 0), 
+    legend.background = element_rect(fill = "transparent", colour = NA),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_blank(),
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    legend.position = "top", 
+  ) +
+    guides(
+    fill = guide_colorbar(
+      title.position = "left", 
+      title.hjust = 0.5   
+    )
+  ) +
+  labs(
+    title = paste("Dwell times:", column_name),
+    x = NULL,
+    y = NULL,
+    fill = "log2FC" # Legend title
+  )
+  return(heat)
+}
+
+# Normalized heatmaps
+normalized_df <- result_df %>%
+  mutate(
+    VAL = VAL - CTRL,
+    LEU = LEU - CTRL,
+    ILE = ILE - CTRL,
+    DOUBLE = DOUBLE - CTRL,
+    TRIPLE = TRIPLE - CTRL
+  )
+
+columns_to_plot <- c("ILE", "LEU", "DOUBLE", "VAL", "TRIPLE")
+
+for (col in columns_to_plot) {
+  heat <- create_heatmap(col, normalized_df, custom_order, limits = c(-1.5, 1.5))
+  ggsave(filename = paste0("../Figures/Heatmaps_", col, "_Norm.svg"),plot = heat,width = 3,height = 7)
+   ggsave(filename = paste0("../Figures/Heatmaps_", col, "_Norm.tiff"),plot = heat,width = 3,height = 7)
+  assign(paste0("heat_", col), heat)
+}
+save(heat_DOUBLE, heat_ILE, heat_LEU, heat_TRIPLE, heat_VAL, file = "../Figures/All_Heatmaps_Norm.RData")
+#rm(list = setdiff(ls(), c("dwell_filtered", "result_df")))
+```
+
+
+# Correlation of dwell time and codon frequency in mouse genome
+```{r}
+library(readxl)
+load(file="../../General_datasets/datatable_Riboseq_normalized.RData")
+codons <- read_excel("../../General_datasets/codon_counts_LNorm_mouse.xlsx")
+
+data$codons <- gsub("T", "U", data$codons)
+colnames(codons) <- gsub("T", "U", colnames(codons))
+
+codon_frequency <- codons %>%
+  filter(Gene %in% data$gene_symbol)%>%
+  select(-Gene) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))%>%
+  pivot_longer(cols = everything(), names_to = "Codon", values_to = "Frequency")
+
+val_codons <- c("GUA", "GUC", "GUG", "GUU")
+ile_codons <- c("AUA", "AUC", "AUU")
+leu_codons <- c("CUA", "CUC", "CUG", "CUU", "UUA", "UUG")
+
+codon_frequency <- codon_frequency %>%
+  mutate(Type = case_when(
+    Codon %in% val_codons ~ "Val",
+    Codon %in% ile_codons ~ "Ile",
+    Codon %in% leu_codons ~ "Leu",
+    TRUE ~ "Other"
+  ))
+
+## BARPLOT FOR CODON FREQUENCIES
+colors <- c("Val" = "#FF7F00", "Ile" = "#377EB8", "Leu" = "#4DAF4A", "Other" = "snow2")
+barplot_codon_frequencies <- ggplot(codon_frequency, aes(x = reorder(Codon, -Frequency), y = Frequency, fill = Type)) +
+  geom_bar(stat = "identity", color="black", size = 0.5) +
+  scale_fill_manual(values = colors) +
+  ylim(0, 0.045)+
+  labs(title = "Codon Frequency",
+       x = "Codon",
+       y = "Frequency [%]") +
+  theme_classic(base_family = "Arial") +
+  theme( plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.background = element_rect(fill = "transparent", colour = NA),
+    legend.position = "top",
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black"), axis.text.x = element_text(angle = 45, hjust = 1, size=10))
+
+ggsave("../Figures/barplot_codon_frequencies.svg", barplot_codon_frequencies, width = 12, height = 4)
+
+## SCATTER PLOT dwell times CTRL and CODON FREQUENCIES
+dwell_filtered2 <- merge(dwell_filtered, codon_frequency, by.x = "codon", by.y = "Codon")
+
+lm_model <- lm(CTRL ~ Frequency, data = dwell_filtered2)
+summary_model <- summary(lm_model)
+R_square <- summary_model$r.squared
+p_Value <- summary_model$coefficients[2,4]
+label_text <- bquote("R"^2 == .(round(R_square, 3)) ~ "| "* "p-value =" ~ .(format(signif(p_Value, digits = 3), scientific = TRUE)))
+
+# Create the scatter plot
+scatter_DT_Codon_frequencies <- ggplot(dwell_filtered2, aes(x = CTRL, y = Frequency * 100)) +
+  geom_point(aes(fill = Type, size = ifelse(Type %in% c("Val", "Ile", "Leu"), 3, 1)), shape = 21) +
+  scale_fill_manual(values = c("Val" = "#FF7F00", "Ile" = "#377EB8", "Leu" = "#4DAF4A", "Other" = "black")) +
+  scale_size_identity() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.background = element_rect(fill = "transparent", colour = NA),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(
+    title = "Dwell times vs. codon frequency",
+    x = "DTs (Ctrl, log2)",
+    y = "Codon frequency (%)",
+    fill = "Codon"  
+  ) +
+  annotate("text", x = 0, y = 0, label = label_text, size = 4, color = "black", family = "Arial") +
+  geom_text_repel(
+    data = dwell_filtered2 %>% filter(Type %in% c("Val", "Ile", "Leu")),
+    aes(label = codon),vjust = -1, color = "black", max.overlaps = Inf,
+      nudge_y = 0.1, segment.color = "grey50", segment.size = 0.5, size = 4, family = "Arial")
+
+scatter_DT_Codon_frequencies
+ggsave("../Figures/scatter_DT_Codon_frequencies.svg", scatter_DT_Codon_frequencies, width = 6, height = 3, , units = "in", dpi = 300)
+ggsave("../Figures/scatter_DT_Codon_frequencies.tiff", scatter_DT_Codon_frequencies, width = 6, height = 3, , units = "in", dpi = 300)
+
+
+save(barplot_codon_frequencies, file = "../Figures/barplot_codon_frequencies.RData")
+save(scatter_DT_Codon_frequencies, file = "../Figures/scatter_DT_Codon_frequencies.RData")
+
+#rm(list = setdiff(ls(), c("result_df")))
+```
+
+
+###Comparison to liver dwell times from Cedrics paper
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(cowplot)
+dwell_liver <- read_excel("../Data/Cedric_Liver_DTs.xlsx", col_types = c("text", "text", "text", "numeric", "numeric", "numeric", "numeric" ))
+
+create_scatter_plot <- function(data, site, y_col, title_sub) {
+  site_data <- data %>% filter(pos == site)
+  
+  lm_model <- lm(as.formula(paste("CTRL ~", y_col)), data = site_data)
+  summary_model <- summary(lm_model)
+  R_square <- summary_model$r.squared
+  p_Value <- summary_model$coefficients[2, 4]
+  label_text <- bquote("R"^2 == .(round(R_square, 3)) ~ ", "* "p-value =" ~ .(format(signif(p_Value, digits = 3), scientific = TRUE)))
+  
+  scatter_plot <- ggplot(site_data, aes_string(x = "CTRL", y = y_col)) +
+    geom_point() +
+    theme_classic(base_family = "Arial") +
+    theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.background = element_rect(fill = "transparent", colour = NA),
+    legend.text = element_text(size = 14, color = "black", face = "plain")
+  ) +
+    labs(title = "Dwell times liver vs. cells",
+         subtitle = title_sub,
+         x = "DTs (LIVER, log2)",
+         y = "DTs (CELLS, log2)") +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+    annotate("text", x = 0, y = -1.8, label = label_text, size = 3, color = "black") +
+    geom_smooth(method = "lm", se = FALSE, color = "red") +
+    xlim(-2, 2) +
+    ylim(-2, 2)
+  
+  return(scatter_plot)
+}
+
+dwell_liver <- dwell_liver %>%
+  mutate(names = paste0(AA, ":", codon)) %>%
+  select(names, codon, pos, AL_NOCHX)
+result_df2 <- merge(result_df, dwell_liver, by = c("codon", "pos"))
+
+sites <- c("A", "P", "E")
+y_cols <- c("AL_NOCHX")
+scatter_plots <- list()
+
+for (site in sites) {
+  for (y_col in y_cols) {
+    title_sub <- paste(site, "site -", y_col)
+    scatter_plots[[paste(site, y_col, sep = "_")]] <- create_scatter_plot(result_df2, site, y_col, title_sub)
+  }
+}
+scatter_AL <- plot_grid(scatter_plots[["A_AL_NOCHX"]], scatter_plots[["P_AL_NOCHX"]], scatter_plots[["E_AL_NOCHX"]], ncol = 3)
+ggsave("../Figures/LiverAL_vs_Cells.svg", scatter_AL, width = 12, height = 4)
+
+A_AL_NOCHX_plot <- scatter_plots[["A_AL_NOCHX"]]
+P_AL_NOCHX_plot <- scatter_plots[["P_AL_NOCHX"]]
+E_AL_NOCHX_plot <- scatter_plots[["E_AL_NOCHX"]]
+save(A_AL_NOCHX_plot, P_AL_NOCHX_plot,E_AL_NOCHX_plot,scatter_AL, file = "../Figures/A_AL_NOCHX.RData")
+
+rm(list = setdiff(ls(), c()))
+```
+
+
+
+################################################################################################################################################################################################################################################################################################################################################################  DARNELL PAPER ##########################################################################################################################################################################################
+
+#Load data single dwell times (P:A_coef)
+```{r}
+library(readxl)
+library(dplyr)
+dwell <- read_excel("../Data/Darnel_DTS_single.xlsx")
+dwell$pos <- as.character(dwell$pos)
+dwell <- as.data.frame(dwell)
+
+dwell <- dwell %>%
+  rename_with(~ sub("_6h$", "", .x))
+
+dwell$codon <- gsub("T", "U", dwell$codon)
+dwell <- dwell %>%
+  mutate(
+    name = gsub("(\\([A-Z]*)T([A-Z]*\\))", "\\1U\\2", name),
+    pos = gsub(".*\\)([^)]*)", "\\1", name) 
+  )
+```
+
+## Dwell times as heatmap with position specificity for Leu, Ile, Val codons!
+```{r}
+# Heatmap function
+create_heatmap <- function(cells, column_name, limits) {
+df <- dwell %>%
+  select(aa, codon, pos, name, starts_with(cells)) %>%  
+  rename_with(~ sub("^[^_]+_", "", .x), starts_with(cells))%>%
+  mutate(arg = arg - rich, leu = leu - rich)%>%
+  select(-rich)
+ 
+custom_order <- c(-14:-1, "E", "P", "A", 1:18) 
+
+df_filtered <- df %>%
+    dplyr::select(name, pos, !!sym(column_name)) %>%
+    dplyr::rename(value = !!sym(column_name)) %>%
+    mutate(name = sub("\\)[^)]*$", ")", name)) %>%
+    filter(grepl("Leu", name) | grepl("Arg", name)) %>%
+    filter(pos %in% custom_order) %>%
+    mutate(pos = factor(pos, levels = custom_order), name = factor(name, levels = unique(name)))
+
+  my_palette <- colorRampPalette(c("darkred", "white", "darkblue"))(100)
+
+  heat <- ggplot(df_filtered, aes(x = name, y = pos, fill = value)) +
+    geom_tile(color = "white") +
+    scale_fill_gradientn(
+      colors = my_palette,
+      limits = limits,
+      oob = scales::squish,
+      breaks = seq(limits[1], limits[2], length.out = 3),
+      labels = round(seq(limits[1], limits[2], length.out = 3), 1)
+    ) +
+    theme_classic(base_family = "Arial") +
+    theme(
+      plot.background = element_rect(fill = "transparent", colour = NA),
+      panel.background = element_rect(fill = "transparent", colour = NA),
+      axis.ticks = element_line(colour = "black"),
+      axis.title = element_text(size = 14, face = "plain", color = "black"),
+      axis.text = element_text(size = 14, face = "plain", color = "black"),
+      legend.title = element_text(size = 14, color = "black", face = "plain", angle = 0),
+      legend.background = element_rect(fill = "transparent", colour = NA),
+      legend.text = element_text(size = 14, color = "black", face = "plain"),
+      plot.title = element_blank(),
+      axis.text.x = element_text(angle = 90, hjust = 1),
+      legend.position = "top"
+    ) +
+    guides(
+      fill = guide_colorbar(
+        title.position = "left",
+        title.hjust = 0.5
+      )
+    ) +
+    labs(
+      title = paste("Dwell times:", column_name),
+      x = NULL,
+      y = NULL,
+      fill = "log2FC"
+    )
+  return(heat)
+}
+
+cell_type <- c("hrgfp", "ragbq99l", "gcn2ko", "293t")
+columns_to_plot <- c("arg", "leu")
+
+for (type in cell_type) {
+for (col in columns_to_plot) {
+  heat <- create_heatmap(type, col, limits = c(-1.5, 1.5))
+ 
+  ggsave(filename = paste0("../Figures/Heatmaps_", col,"_", type, "_Norm.png"), plot = heat, width = 3, height = 7)
+  assign(paste0("heat_", col,"_", type), heat)
+}
+}
+
+# Save all heatmaps
+#save(heat_hrgfp, heat_ragbq99l, heat_gcn2ko, file = "../Figures/All_Heatmaps_Norm.RData")
+
+```
+

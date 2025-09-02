@@ -1,0 +1,85 @@
+---
+title: "Data preparation"
+output: html_document
+date: "2024-05-31"
+---
+#Load position datafile 
+```{r}
+load("../20240429_AA_wig.RData")
+```
+
+## Add length, calculate RPM (library size normalization) and total RPM per transcript
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+expanded_data <- expanded_data %>%
+  dplyr::select(-starts_with("Nag_"))%>%
+  group_by(name) %>%
+  mutate(length = max(position, na.rm = TRUE)) %>%
+  ungroup()%>%
+  pivot_longer(cols = ends_with("RIBO_NA"), names_to = "Sample", values_to = "raw_counts") %>%
+  group_by(Sample) %>%
+  mutate(Library_size = sum(raw_counts, na.rm = TRUE)) %>%
+  ungroup()%>%
+  group_by(gene_symbol, Sample)%>%
+  mutate(RPM = (raw_counts/Library_size)*1e6,
+         total_RPM = sum(RPM, na.rm = TRUE),
+         RPKM = (RPM/(length / 1000)),
+         total_RPKM = sum(RPKM, na.rm = TRUE))%>%
+  ungroup()
+```
+
+##Filter for sufficient counts on genes
+```{r}
+gene_sample_sum <- expanded_data %>%
+  group_by(gene_symbol, Sample) %>%
+  summarise(sum_raw_counts = sum(raw_counts, na.rm = TRUE))%>%
+  ungroup() %>%
+  group_by(gene_symbol) %>%
+  summarise(mean_sum_raw_counts = mean(sum_raw_counts, na.rm = TRUE))%>%
+  ungroup() %>%
+  filter(mean_sum_raw_counts >= 50)
+
+data <- expanded_data %>%
+  filter(gene_symbol %in% gene_sample_sum$gene_symbol)
+```
+
+#Filter for gene coverage
+```{r}
+gene_coverage <- data %>%
+  group_by(Sample, gene_symbol) %>%
+  summarise(
+    non_zero_positions = sum(raw_counts != 0, na.rm = TRUE),
+    total_length = sum(raw_counts == 0, na.rm = TRUE) + non_zero_positions,
+    gene_coverage = non_zero_positions / total_length) %>%
+  ungroup() %>%
+  dplyr::select(-c(non_zero_positions, total_length)) %>%
+  group_by(gene_symbol) %>%
+  summarise(mean_coverage = mean(gene_coverage, na.rm = TRUE))%>%
+  ungroup() %>%
+  filter(mean_coverage >= 0.3)
+
+data <- data %>%
+  filter(gene_symbol %in% gene_coverage$gene_symbol)
+```
+
+#Filter and Normalize Data
+```{r}
+# Filtering genes by read counts and normalizing data
+data <- data %>%
+  group_by(gene_symbol, Sample)%>%
+  mutate(
+    normalized_position = floor(100 * position / length),
+    Norm_RPM = RPM/total_RPM,
+    Norm_RPKM = RPKM/total_RPKM,
+    condition = gsub("^Lina_", "", Sample),
+    condition = gsub("_[0-9]_RIBO_NA$", "", condition),
+    replicate = gsub(".*_([0-9])_RIBO_NA", "\\1", Sample))%>%
+  ungroup()
+
+save(data,file="../datatable_Riboseq_normalized.RData")
+
+```
+

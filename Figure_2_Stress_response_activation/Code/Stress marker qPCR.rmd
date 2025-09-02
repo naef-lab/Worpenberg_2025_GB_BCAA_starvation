@@ -1,0 +1,160 @@
+---
+title: "qPCR_stress marker"
+output: html_document
+date: "2024-08-14"
+---
+```{r}
+library(readxl)
+qPCR <- read_excel("../Data/qPCR_ALL.xlsx", 
+    sheet = "FINAL")
+
+## Filter for which genes to include
+qPCR <- qPCR %>%
+  na.omit() %>%
+  filter(!Gene %in% c("chop", "iars", "lars", "vars"))
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(ggsignif)
+
+custom_colors <- c(
+  "Ctrl" = "black",
+  "Leu" = "gray",
+  "Ile" = "gray",
+  "Val" = "gray",
+  "Double" = "gray",
+  "Triple" = "gray"
+)
+
+# Summarize data
+qPCR_summary <- qPCR %>%
+  group_by(Time, Condition, Gene) %>%
+  summarise(
+    mean_FC = mean(FoldChange),
+    se_FC = sd(FoldChange) / sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  filter(Time != "24h")
+
+# Ensure factors
+qPCR_summary$Condition <- factor(qPCR_summary$Condition,
+                                 levels = c("Ctrl", "Leu", "Ile", "Val", "Double", "Triple"))
+qPCR_summary$Time <- factor(qPCR_summary$Time, levels = c("3h", "6h"))
+
+# Perform pairwise t-tests to compare each condition to 'Ctrl'
+significance_data <- qPCR %>%
+  filter(Time != "24h") %>%
+  group_by(Time, Gene) %>%
+  reframe(
+    Comparison = levels(factor(Condition))[-1],  
+    p_value = sapply(Comparison, function(cond) {
+      t.test(FoldChange[Condition == "Ctrl"], FoldChange[Condition == cond])$p.value
+    })
+  ) %>%
+  mutate(
+    stars = case_when(
+      p_value < 0.001 ~ "***",
+      p_value < 0.01 ~ "**",
+      p_value < 0.05 ~ "*",
+      TRUE ~ "ns"
+    ),
+    xmin = match(Comparison, levels(qPCR_summary$Condition)) - 0.45,
+    xmax = match(Comparison, levels(qPCR_summary$Condition)) + 0.45,
+    y_position = 4  # Adjust this value as needed
+  )
+
+
+
+qPCR_summary$name <- paste0(qPCR_summary$Gene,"_",qPCR_summary$Time, "_", qPCR_summary$Condition)
+significance_data$name <- paste0(significance_data$Gene,"_",significance_data$Time, "_", significance_data$Comparison)
+
+qPCR_summary <- merge(qPCR_summary, significance_data, by=c("name"), all.x=TRUE)
+
+qPCR_summary <- qPCR_summary %>%
+  mutate(Time=Time.x, Gene=Gene.x)%>%
+  select(-Time.y, -Gene.y, -Time.x, -Gene.x) 
+
+
+# Create the bar plot with error bars and significance stars
+qPCR_plot <- ggplot(qPCR_summary, aes(x = Condition, y = mean_FC, fill = Condition)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9), color = "black") +
+  geom_errorbar(aes(ymin = mean_FC - se_FC, ymax = mean_FC + se_FC),
+                position = position_dodge(width = 0.9), width = 0.2, color = "black") +
+  facet_grid(Gene ~ Time, scales = "free_y", space = "free") +
+  labs(
+    x = "Condition",
+    y = "Fold Change"
+  ) +
+  scale_fill_manual(values = custom_colors) +
+  theme_classic() +
+  theme(
+    text = element_text(family = "Arial", color = "black", size = 14),
+    strip.background = element_blank(),
+    strip.placement = "outside",
+    axis.text.x = element_text(angle = 90, hjust = 0.5, color = "black", size = 14),
+    axis.text.y = element_text(color = "black", size = 14),
+    axis.title.x = element_text(color = "black", size = 14),
+    axis.title.y = element_text(color = "black", size = 14),
+    strip.text = element_text(color = "black", size = 14),
+    panel.spacing = unit(0.5, "lines"),
+    legend.position = "none"
+  ) +
+  labs(title = NULL) +
+  scale_y_continuous(limits = c(0, 4.5)) +
+  geom_text(
+    data = qPCR_summary,
+    aes(x = as.numeric(Condition), y = y_position, label = stars),
+    color = "black",
+    size = 4,  # Adjusted to match text size better
+    vjust = 0
+  )
+
+print(qPCR_plot)
+
+
+# Save the plot
+ggsave(filename = "../Figures/qPCR_plot.svg", plot = qPCR_plot, width = 4, height = 6, units = "in", dpi = 300)
+ggsave(filename = "../Figures/qPCR_plot.tiff", plot = qPCR_plot, width = 4, height = 6, units = "in", dpi = 300)
+save(qPCR_plot, file = "../Figures/qPCR_plot.RData")
+```
+
+```{r}
+plot_qPCR <- function(data, gene) {
+  # Filter data for the selected gene
+  plot_data <- data %>% filter(Gene == gene)
+
+  # Generate plot
+  ggplot(plot_data, aes(x = Condition, y = mean_FC, color = Time, shape = Time, fill = Time)) +
+    geom_point(size = 4, alpha = 0.8, stroke = 1, color = "black", position = position_dodge(width = 0.5)) +  # Black outline
+    geom_errorbar(aes(ymin = mean_FC - se_FC, ymax = mean_FC + se_FC), 
+                  width = 0.2, position = position_dodge(width = 0.5)) +  # Error bars
+    labs(title = paste("", gene), y = "Fold Change", x = "") +
+    theme_classic(base_family = "Arial") +
+    theme(
+      axis.text.x = element_text(size = 14, face = "plain", color = "black", angle = 90),
+      axis.text.y = element_text(size = 14, face = "plain", color = "black"),
+      axis.title = element_text(size = 14, face = "plain", color = "black"),
+      plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black"),
+      legend.title = element_text(size = 14, color = "black", face = "plain"),
+      legend.text = element_text(size = 14, color = "black", face = "plain"),
+      legend.position = "bottom"
+    ) +
+    scale_y_continuous(limits = c(0, 4))+
+    geom_hline(yintercept = 1, linetype = "dashed", color = "black")+
+    scale_shape_manual(values = c("3h" = 21, "6h" = 24)) +  # Different shapes for 3h (circle) and 6h (triangle)
+    scale_fill_manual(values = c("3h" = "gray", "6h" = "blue"))  # Fill colors
+}
+
+plot_asns <- plot_qPCR(qPCR_summary, "asns")
+plot_atg3 <- plot_qPCR(qPCR_summary, "atg3")
+plot_p62 <- plot_qPCR(qPCR_summary, "p62")
+
+ggsave("../Figures/plot_asns.tiff", plot = plot_asns, device = "tiff", width = 2.5, height = 4)
+ggsave("../Figures/plot_atg3.tiff", plot = plot_atg3, device = "tiff", width = 2.5, height = 4)
+ggsave("../Figures/plot_p62.tiff", plot = plot_p62, device = "tiff", width = 2.5, height = 4)
+
+```
+

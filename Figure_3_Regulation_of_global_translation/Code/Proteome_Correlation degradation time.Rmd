@@ -1,0 +1,1038 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-08-20"
+---
+
+```{r}
+library(readxl)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+```
+```{r}
+Degradation <- read_excel("../../General_datasets/Degradation rates.xlsx")
+Degradation <- Degradation %>%
+  filter(!is.na(Gene))  %>%
+  group_by(Gene) %>%
+  dplyr::summarise(across(.cols = everything(), .fns = ~mean(.x, na.rm = TRUE)))
+Degradation <- as.data.frame(Degradation)
+row.names(Degradation) <- Degradation$Gene
+
+load("../../General_datasets/Proteome_logFC.RData")
+```
+
+```{r}
+treatments <- c("Leu", "Ile", "Val", "Double", "Triple")
+Proteome <- Proteome_logFC
+# All Conditions
+# All Conditions
+Val_all <- Proteome %>%
+  filter(Proteome_Val_PValue < 0.01 & (Proteome_Val_logFC < -0.26 | Proteome_Val_logFC > 0.26)) %>%
+  select(Gene)
+
+Leu_all <- Proteome %>%
+  filter(Proteome_Leu_PValue < 0.01 & (Proteome_Leu_logFC < -0.26 | Proteome_Leu_logFC > 0.26)) %>%
+  select(Gene)
+
+Ile_all <- Proteome %>%
+  filter(Proteome_Ile_PValue < 0.01 & (Proteome_Ile_logFC < -0.26 | Proteome_Ile_logFC > 0.26)) %>%
+  select(Gene)
+
+Double_all <- Proteome %>%
+  filter(Proteome_Double_PValue < 0.01 & (Proteome_Double_logFC < -0.26 | Proteome_Double_logFC > 0.26)) %>%
+  select(Gene)
+
+Triple_all <- Proteome %>%
+  filter(Proteome_Triple_PValue < 0.01 & (Proteome_Triple_logFC < -0.26 | Proteome_Triple_logFC > 0.26)) %>%
+  select(Gene)
+
+filtered_proteins <- rbind(Val_all, Leu_all, Ile_all, Double_all, Triple_all)
+
+# Down Conditions
+Val_Down <- Proteome %>%
+  filter(Proteome_Val_PValue < 0.01 & Proteome_Val_logFC < -0.26) %>%
+  select(Gene)
+
+Leu_Down <- Proteome %>%
+  filter(Proteome_Leu_PValue < 0.01 & Proteome_Leu_logFC < -0.26) %>%
+  select(Gene)
+
+Ile_Down <- Proteome %>%
+  filter(Proteome_Ile_PValue < 0.01 & Proteome_Ile_logFC < -0.26) %>%
+  select(Gene)
+
+Double_Down <- Proteome %>%
+  filter(Proteome_Double_PValue < 0.01 & Proteome_Double_logFC < -0.26) %>%
+  select(Gene)
+
+Triple_Down <- Proteome %>%
+  filter(Proteome_Triple_PValue < 0.01 & Proteome_Triple_logFC < -0.26) %>%
+  select(Gene)
+
+filtered_proteins_down <- rbind(Val_Down, Leu_Down, Ile_Down, Double_Down, Triple_Down)
+
+# Up Conditions
+Val_Up <- Proteome %>%
+  filter(Proteome_Val_PValue < 0.01 & Proteome_Val_logFC > 0.26) %>%
+  select(Gene)
+
+Leu_Up <- Proteome %>%
+  filter(Proteome_Leu_PValue < 0.01 & Proteome_Leu_logFC > 0.26) %>%
+  select(Gene)
+
+Ile_Up <- Proteome %>%
+  filter(Proteome_Ile_PValue < 0.01 & Proteome_Ile_logFC > 0.26) %>%
+  select(Gene)
+
+Double_Up <- Proteome %>%
+  filter(Proteome_Double_PValue < 0.01 & Proteome_Double_logFC > 0.26) %>%
+  select(Gene)
+
+Triple_Up <- Proteome %>%
+  filter(Proteome_Triple_PValue < 0.01 & Proteome_Triple_logFC > 0.26) %>%
+  select(Gene)
+
+
+filtered_proteins_up <- rbind(Val_Up, Leu_Up, Ile_Up, Double_Up, Triple_Up)
+```
+
+
+```{r}
+merged_up <- merge(filtered_proteins_up, Degradation, by.x = "Gene", by.y = "Gene", all.x = TRUE)
+merged_down <- merge(filtered_proteins_down, Degradation, by.x = "Gene", by.y = "Gene", all.x = TRUE)
+merged_all <- Degradation
+merged_all$Gene <- merged_all$Gene
+
+merged_up$Type <- "Up"
+merged_down$Type <- "Down"
+merged_all$Type <- "All"
+merged <- rbind(merged_up, merged_down, merged_all)
+
+anova_result <- aov(Protein_halflife ~ Type, data = merged)
+tukey_result <- TukeyHSD(anova_result)
+p_values <- as.data.frame(tukey_result$Type)
+p_values <- p_values %>%
+  select(-diff, -lwr, -upr)
+
+p_down_all <- p_values["Down-All", "p adj"]
+p_up_all <- p_values["Up-All", "p adj"]
+
+
+box_halflife <- ggplot(merged, aes(x = Type, y = log2(Protein_halflife), fill=Type)) +
+  geom_boxplot(color="black") +
+  xlab("Condition") +
+  ylab("Protein Half-life (h; log2)") +
+# annotate("text", x = 2, y = 14, label = paste("p:", format(p_down_all, digits = 2, scientific = TRUE)), vjust = -1.5) +
+#  annotate("text", x = 3, y = 14, label = "N.S", vjust = -1.5) +
+  scale_fill_manual(values=c("All"="gray", "Down"="blue", "Up"="darkred"))+
+  ylim(0, 15) +
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black"),
+    legend.position = "none")
+
+box_halflife
+
+ggsave("../Figures/Boxplot_halflifes.svg", plot = box_halflife, width = 2, height = 3, dpi = 300)
+ggsave("../Figures/Boxplot_halflifes.tiff", plot = box_halflife, width = 2, height = 3, dpi = 300)
+save(box_halflife, file="../Figures/Boxplot_halflifes.RData")
+```
+```{r}
+library(dplyr)
+library(ggplot2)
+
+### Functions to calculate theoretical values ###
+
+# Calculate theoretical log2FC from half-life (in hours)
+calculate_log2FC <- function(half_life_hours) {
+  -6 / half_life_hours
+}
+
+# Prepare a data frame of theoretical values over a range of half-lives
+prepare_theoretical_data <- function(range = seq(0, 12, length.out = 100)) {
+  half_life_values <- 2^range
+  data.frame(
+    log2HalfLife = log2(half_life_values),
+    log2FC = sapply(half_life_values, calculate_log2FC)
+  )
+}
+theoretical_data <- prepare_theoretical_data()
+
+merged_df <- Proteome %>%
+  inner_join(Degradation, by = "Gene") %>%
+  mutate(
+    theoretical_log2FC = approx(
+      x = theoretical_data$log2HalfLife,
+      y = theoretical_data$log2FC,
+      xout = log2(Protein_halflife),
+      rule = 2
+    )$y,
+    Significance = if_else(Proteome_Val_PValue < 0.01 & Proteome_Val_logFC < -0.26, "Significant", "Not Significant")
+  )
+
+
+# Correlation between the theoretical log2FC and the measured Proteome_Val_logFC
+correlation_Val <- cor(merged_df$theoretical_log2FC,
+                       merged_df$Proteome_Val_logFC,
+                       use = "complete.obs")
+
+### Plotting functions ###
+
+# Plotting function without filtering based on RPF (IsFiltered removed)
+create_plot <- function(data, theoretical_data, x, y, title, correlation = NULL, ylim_range = c(-2, 2)) {
+  p <- ggplot() +
+    # Plot non-significant points first (gray fill with black outline)
+    geom_point(data = dplyr::filter(data, Significance == "Not Significant"),
+               aes(x = {{ x }}, y = {{ y }}),
+               shape = 21, size = 3, alpha = 0.6, fill = "gray", color = "black") +
+    # Plot significant points afterwards (darkblue fill with black outline)
+    geom_point(data = dplyr::filter(data, Significance == "Significant"),
+               aes(x = {{ x }}, y = {{ y }}),
+               shape = 21, size = 3, alpha = 0.6, fill = "blue", color = "black") +
+    # Overlay the theoretical line
+    geom_line(data = theoretical_data, aes(x = 6/(2^log2HalfLife), y = log2FC),
+              color = "red", size = 1, linetype = "dashed") +
+    labs(x = "6h/half-life", y = "Measured log2FC", title = title) +
+    theme_classic(base_family = "Arial") +
+    theme(
+      plot.background  = element_rect(fill = "transparent", colour = NA),
+      panel.background = element_rect(fill = "transparent", colour = NA),
+      axis.ticks       = element_line(colour = "black"),
+      axis.title       = element_text(size = 14, face = "plain", color = "black"),
+      axis.text        = element_text(size = 14, face = "plain", color = "black"),
+      plot.title       = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")
+    ) +
+    ylim(c(-1,1))+
+    xlim(c(0,2))
+  
+  if (!is.null(correlation)) {
+    p <- p + annotate("text", x = 7, y = ylim_range[1],
+                      label = paste("r =", round(correlation, 2)),
+                      hjust = 1.1, vjust = -0.5, size = 4, color = "black")
+  }
+  return(p)
+}
+
+### Generate the plots ###
+
+# Plot 1: x-axis is log2(Protein_halflife) from Degradation, y-axis is Proteome_Val_logFC
+plot_Val1 <- create_plot(merged_df, theoretical_data,
+                         x = 6/Protein_halflife,
+                         y = Proteome_Val_logFC,
+                         title = "Val",
+                         correlation = correlation_Val)
+
+# Plot 2: x-axis is the theoretical_log2FC and y-axis is the measured Proteome_Val_logFC
+plot_Val2 <- ggplot(merged_df, aes(x = theoretical_log2FC, y = Proteome_Val_logFC)) +
+  geom_point(size = 3, alpha = 0.7, color = "darkblue") +
+  ylim(-1.5, 0) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "solid", size = 1) +
+  labs(x = "Theoretical log2FC", y = "Measured log2FC", title = "Val") +
+  theme_classic(base_family = "Arial")
+
+### Save and display the plots ###
+
+# Save plot_Val1 in various formats (adjust file paths as needed)
+save(plot_Val1, file = "../Figures/Degradation_correlation_Val.RData")
+ggsave("../Figures/Degradation_correlation_Val.png", plot = plot_Val1, width = 3, height = 3, dpi = 300)
+ggsave("../Figures/Degradation_correlation_Val.tiff", plot = plot_Val1, width = 3, height = 3, dpi = 300)
+
+# Display the plots
+plot_Val1
+plot_Val2
+```
+
+
+
+
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+load("../../General_datasets/log2FC_pValue.RData")
+
+# Function to calculate theoretical log2FC based on half-life
+calculate_log2FC <- function(half_life_hours) {
+  -6 / half_life_hours
+}
+
+# Function to prepare data for plotting
+prepare_theoretical_data <- function(range = seq(0, 12, length.out = 100)) {
+  half_life_values <- 2^range
+  data.frame(log2HalfLife = log2(half_life_values),
+             log2FC = sapply(half_life_values, calculate_log2FC))
+}
+
+# Generate theoretical data
+range_values <- seq(0, 12, length.out = 100)
+theoretical_data <- prepare_theoretical_data(range_values)
+
+# Add IsFiltered column to Proteome_Deg
+Proteome_Deg <- Proteome %>%
+  mutate(IsFiltered = ifelse(Gene %in% filtered_proteins_down$Gene, "Filtered","Not Filtered"),
+         IsFiltered = factor(IsFiltered, levels = c("Not Filtered", "Filtered")), 
+         theoretical_log2FC = approx(theoretical_data$log2HalfLife, theoretical_data$log2FC,xout = log2(Protein_halflife), rule = 2)$y)
+
+# Filter data for specific conditions
+#below_theoretical <- Proteome_Deg %>% filter(Proteome_Val_logFC < theoretical_log2FC)
+#below_theoretical_filtered <- below_theoretical %>% filter(IsFiltered == "Filtered")
+filtered_data <- Proteome_Deg %>% filter(IsFiltered == "Filtered")
+
+# Correlation calculation
+#correlation_Val <- cor(filtered_data$theoretical_log2FC,filtered_data$Proteome_Val_logFC,use = "complete.obs")
+
+# Plotting function
+create_plot <- function(data, theoretical_data, x, y, title, correlation = NULL, ylim_range = c(-2, 2)) {
+  ggplot(data, aes(x = {{ x }}, y = {{ y }})) +
+    geom_point(data = data %>% filter(IsFiltered == "Not Filtered"),aes(fill = IsFiltered),size = 1.5, color = "gray") +
+    geom_point(data = data %>% filter(IsFiltered == "Filtered"),aes(fill = IsFiltered),size = 3,alpha = 0.5,shape = 21,fill = "darkblue",color = "darkblue") +
+    geom_line(data = theoretical_data,aes(x = log2HalfLife, y = log2FC),color = "black",size = 1,linetype = "dashed") +
+    labs(x = "log2(half-life) [h]", y = "Measured log2FC", title = title) +
+    theme_classic(base_family = "Arial") +
+    theme(plot.background = element_rect(fill = "transparent", colour = NA),
+      panel.background = element_rect(fill = "transparent", colour = NA),
+      axis.ticks = element_line(colour = "black"),
+      axis.title = element_text(size = 14, face = "plain", color = "black"),
+      axis.text = element_text(size = 14, face = "plain", color = "black"),
+      legend.title = element_text(size = 14, color = "black", face = "plain"),
+      legend.text = element_text(size = 14, color = "black", face = "plain"),
+      plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")) +
+    ylim(ylim_range) +
+    guides(fill = FALSE) 
+  #  if (!is.null(correlation)) annotate("text",x = 7,y = 2,label = paste("r =", round(correlation, 2)),hjust = 1.1,vjust = 2,size = 4,color = "black")
+}
+
+# Generate plots
+plot_Val1 <- create_plot(Proteome_Deg,theoretical_data,log2(Protein_halflife),merged_all,"Val",correlation = correlation_Val)
+
+
+plot_Val2 <- ggplot(Proteome_Deg, aes(x = theoretical_log2FC, y = Proteome_Val_logFC)) +
+  geom_point(data = Proteome_Deg %>% filter(IsFiltered == "Not Filtered"),aes(fill = IsFiltered),size = 1.5,color = "gray" ) +
+  geom_point(data = Proteome_Deg %>% filter(IsFiltered == "Filtered"),aes(fill = IsFiltered),size = 3,alpha = 0.5,shape = 21,fill = "darkblue",color = "darkblue") +
+  ylim(-1.5, 0) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "solid", size = 1)
+
+# Save and display plots
+save(plot_Val1, file = "../Figures/Degradation_correlation_Val.RData")
+ggsave("../Figures/Degradation_correlation_Val.svg", plot = plot_Val1, width = 3, height = 3, dpi = 300)
+ggsave("../Figures/Degradation_correlation_Val.tiff", plot = plot_Val1, width = 3, height = 3, dpi = 300)
+plot_Val1
+plot_Val2
+
+```
+################CODE FELIX####################################
+
+```{r}
+# Load required libraries
+library(readxl)
+library(ggplot2)
+library(dplyr)
+
+# Load data
+proteome_df <- Proteome_logFC
+degradation_df <- Degradation
+
+# Merge by 'Gene'
+merged_df <- inner_join(proteome_df, degradation_df, by = "Gene")
+
+# Define the fold-change function
+fc <- function(hl, x_after = 0, x_before = 1, t = 6) {
+  x <- x_after + (x_before - x_after) * 2^(-t / hl)
+  return(x / x_before)
+}
+
+# Compute values for synthesis scenarios
+hl_sorted <- sort(merged_df$Protein_halflife)
+x_vals <- 6 / hl_sorted
+fc_stop <- log2(fc(hl_sorted, x_after = 0, x_before = 1, t = 6))
+fc_half <- log2(fc(hl_sorted, x_after = 0.5, x_before = 1, t = 6))
+
+# Create base plot
+p <- ggplot(merged_df, aes(x = 6 / Protein_halflife, y = Proteome_Triple_logFC)) +
+  geom_point(alpha = 0.5, size = 1) +
+  geom_line(aes(x = x_vals, y = fc_stop), color = "orange", size = 1, inherit.aes = FALSE) +
+  geom_line(aes(x = x_vals, y = fc_half), color = "sienna", size = 1, inherit.aes = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  annotate("rect", xmin = 0, xmax = 0.5, ymin = -1, ymax = 1, alpha = 0.3, fill = "gray") +
+  annotate("text", x = 0.5, y = 0.75, label = "long lived\n(>12h)", size = 3) +
+  annotate("text", x = 1.5, y = 0.75, label = "short lived\n(<12h)", size = 3) +
+  scale_x_continuous(limits = c(0, 2), breaks = c(0, 0.5, 1, 2), labels = c("0", "0.5", "1", "2")) +
+#  scale_y_continuous(limits = c(-1, 1), breaks = c(-1, -0.5, 0, 0.5, 1), labels = c("-1", "-0.5", "0", "0.5", "1")) +
+  labs(x = "6 hr / half life", y = "log2(FC)") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+
+# Display plot
+print(p)
+
+ggsave("../Figures/Degradation_correlation_FELIX.png", plot = p, width = 3, height = 3, dpi = 300)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+correlation_Leu <- cor(Proteome_Deg$theoretical_log2FC, Proteome_Deg$Leu_mean, use = "complete.obs")
+plot_Leu <- ggplot(Proteome_Deg, aes(x = log2(Protein_halflife), y = Leu_mean)) +
+  geom_point(aes(fill=IsFiltered), alpha = 0.5, size=2, shape= 21) +
+  scale_fill_manual(values = c("Filtered" = "red", "Not Filtered" = "grey100")) +
+ geom_line(data = theoretical_data, aes(x = log2HalfLife, y = log2FC), color = "black", size=1, linetype="dashed") +
+ # geom_smooth(method = "lm", data = Proteome_Deg, se = FALSE, color = c("red")) +
+  labs(x = "log2(half-life) [h]", y = "Measured log2FC", title = "Leu") +
+  theme_classic(base_family = "Arial") +
+  theme( plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")) +
+        annotate("text", x = 7, y = 2, label = paste("r =", round(correlation_Leu, 2)), 
+        hjust = 1.1, vjust = 2, size = 4, color = "black")+
+  ylim(-2,2)+ guides(fill = FALSE)
+
+plot_Leu
+
+correlation_Ile <- cor(Proteome_Deg$theoretical_log2FC, Proteome_Deg$Ile_mean, use = "complete.obs")
+plot_Ile <- ggplot(Proteome_Deg, aes(x = log2(Protein_halflife), y = Ile_mean)) +
+  geom_point(aes(fill=IsFiltered), alpha = 0.5, size=2, shape=21) +
+  scale_fill_manual(values = c("Filtered" = "red", "Not Filtered" = "grey100")) +
+  geom_line(data = theoretical_data, aes(x = log2HalfLife, y = log2FC), color = "black", size=1, linetype="dashed") +
+ # geom_smooth(method = "lm", data = Proteome_Deg, se = FALSE, color = c("red")) +
+  labs(x = "log2(half-life) [h]", y = "Measured log2FC", title = "Ile") +
+  theme_classic(base_family = "Arial") +
+  theme( plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")) +
+        annotate("text", x = 7, y = 2, label = paste("r =", round(correlation_Ile, 2)), 
+        hjust = 1.1, vjust = 2, size = 4, color = "black")+
+  ylim(-2,2)+ guides(fill = FALSE)
+
+plot_Ile
+
+
+
+correlation_Triple <- cor(Proteome_Deg$theoretical_log2FC, Proteome_Deg$Triple_mean, use = "complete.obs")
+plot_Triple <- ggplot(Proteome_Deg, aes(x = log2(Protein_halflife), y = Triple_mean)) +
+  geom_point(aes(fill=IsFiltered), alpha = 0.5, size=2, shape=21) +
+  scale_fill_manual(values = c("Filtered" = "red", "Not Filtered" = "grey100")) +
+  geom_line(data = theoretical_data, aes(x = log2HalfLife, y = log2FC), color = "black", size=1, linetype="dashed") +
+ # geom_smooth(method = "lm", data = Proteome_Deg, se = FALSE, color = c("red")) +
+  labs(x = "log2(half-life) [h]", y = "Measured log2FC", title = "Triple") +
+  theme_classic(base_family = "Arial") +
+  theme( plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")) +
+        annotate("text", x = 7, y = 2, label = paste("r =", round(correlation_Triple, 2)), 
+        hjust = 1.1, vjust = 2, size = 4, color = "black")+
+  ylim(-2,2)+ guides(fill = FALSE)
+
+plot_Triple
+
+correlation_Double <- cor(Proteome_Deg$theoretical_log2FC, Proteome_Deg$Double_mean, use = "complete.obs")
+plot_Double <- ggplot(Proteome_Deg, aes(x = log2(Protein_halflife), y = Double_mean)) +
+  geom_point(aes(fill=IsFiltered), alpha = 0.5, size=2, shape=21) +
+  scale_fill_manual(values = c("Filtered" = "red", "Not Filtered" = "grey100")) +
+  geom_line(data = theoretical_data, aes(x = log2HalfLife, y = log2FC), color = "black", size=1, linetype="dashed") +
+ # geom_smooth(method = "lm", data = Proteome_Deg, se = FALSE, color = c("red")) +
+  labs(x = "log2(half-life) [h]", y = "Measured log2FC", title = "Double") +
+  theme_classic(base_family = "Arial") +
+  theme( plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")) +
+        annotate("text", x = 7, y = 2, label = paste("r =", round(correlation_Double, 2)), 
+        hjust = 1.1, vjust = 2, size = 4, color = "black")+
+  ylim(-2,2)+ guides(fill = FALSE)
+
+plot_Double
+
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Halflife/Model_decay_Val.png",plot_Val, width = 2, height = 3)
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Halflife/Model_decay_Leu.png",plot_Leu, width = 2, height = 3)
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Halflife/Model_decay_Ile.png",plot_Ile, width = 2, height = 3)
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Halflife/Model_decay_Triple.png",plot_Triple, width = 2, height = 3)
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Halflife/Model_decay_Double.png",plot_Double, width = 2, height = 3)
+```
+
+
+```{r}
+Proteome_Deg$theoretical_log2FC <- with(Proteome_Deg, approx(theoretical_data$log2HalfLife, theoretical_data$log2FC, xout=log2(Protein_halflife), rule=2)$y)
+
+# Filter all proteins below their theoretical log2FC
+below_theoretical_Val <- Proteome_Deg[Proteome_Deg$Val_mean < Proteome_Deg$theoretical_log2FC, ]
+below_theoretical_Leu <- Proteome_Deg[Proteome_Deg$Leu_mean < Proteome_Deg$theoretical_log2FC, ]
+below_theoretical_Ile <- Proteome_Deg[Proteome_Deg$Ile_mean < Proteome_Deg$theoretical_log2FC, ]
+below_theoretical_Triple <- Proteome_Deg[Proteome_Deg$Triple_mean < Proteome_Deg$theoretical_log2FC, ]
+below_theoretical <- rbind(below_theoretical_Ile, below_theoretical_Leu, below_theoretical_Val, below_theoretical_Triple)
+
+# Filter "Filtered" proteins below their theoretical log2FC
+below_theoretical_filtered <- below_theoretical[below_theoretical$IsFiltered == "Filtered", ]
+```
+
+##Overlap with UpsetR
+```{r}
+library(UpSetR)
+list_all <- list(
+  "Leu" = below_theoretical_Leu$Gene.Symbol,
+  "Ile" = below_theoretical_Ile$Gene.Symbol,
+  "Val" = below_theoretical_Val$Gene.Symbol,
+   "Triple" = below_theoretical_Triple$Gene.Symbol
+)
+  
+ plot <- upset(fromList(list_all), main.bar.color = "black", sets.bar.color = "gray", order.by = "freq", text.scale = 1.5, nsets = 5, nintersects = 15)
+ plot
+ 
+
+unique_Leu <- setdiff(list_all$Leu, Reduce(union, list_all[names(list_all) != "Leu"]))
+unique_Ile <- setdiff(list_all$Ile, Reduce(union, list_all[names(list_all) != "Ile"]))
+unique_Val <- setdiff(list_all$Val, Reduce(union, list_all[names(list_all) != "Val"]))
+unique_Triple <- setdiff(list_all$Triple, Reduce(union, list_all[names(list_all) != "Triple"]))
+
+
+triple_or_val <- union(list_all$Triple, list_all$Val)
+ile_or_leu <- union(list_all$Ile, list_all$Leu)
+
+# Genes that are in Triple or Val, but not in Ile or Leu
+exclusive_triple_val <- setdiff(triple_or_val, ile_or_leu)
+exclusive_ile_leu <- setdiff(ile_or_leu, triple_or_val)
+
+
+# Extract common genes across all three conditions
+common_all <- Reduce(intersect, list_all)
+
+```
+```{r}
+library(enrichR)
+library(ggplot2)
+library(dplyr)
+
+dbs <- listEnrichrDbs()
+dbb <- dbs$libraryName[grep('GO_.+2023|KEGG_2019.+Mouse', dbs$libraryName)]
+
+GO_unique_Leu <- enrichr(unique_Leu, databases = dbb)
+GO_unique_Ile <- enrichr(unique_Ile, databases = dbb)
+GO_unique_Val <- enrichr(unique_Val, databases = dbb)
+GO_unique_Triple <- enrichr(unique_Triple, databases = dbb)
+GO_unique_Triple_Val <- enrichr(exclusive_triple_val, databases = dbb)
+GO_unique_Leu_Ile <- enrichr(exclusive_ile_leu, databases = dbb)
+GO_common_all <- enrichr(common_all, databases = dbb)
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+
+create_GO_plot <- function(data, title) {
+  
+  category_data <- data$GO_Molecular_Function_2023
+  
+  top_data <- category_data %>%
+    filter(P.value < 0.05 & Combined.Score > 10) %>%
+    arrange(Adjusted.P.value) %>%
+    head(10)
+  
+  plot <- ggplot(top_data, aes(x = reorder(Term, -Combined.Score), y = Combined.Score)) + 
+          geom_col() +
+          coord_flip() +  
+          labs(x = "Term", y = "Combined Score", title = title) +
+          theme_classic(base_size = 12)
+  
+  return(plot)
+}
+
+Leu_MF <- create_GO_plot(GO_unique_Leu, "GO: Molecular Function (Unique Leu)")
+Ile_MF <- create_GO_plot(GO_unique_Ile, "GO: Molecular Function (Unique Ile)")
+Val_MF <- create_GO_plot(GO_unique_Val, "GO: Molecular Function (Unique Val)")
+Triple_MF <- create_GO_plot(GO_unique_Triple, "GO: Molecular Function (Unique Triple)")
+Triple_Val_MF <- create_GO_plot(GO_unique_Triple_Val, "GO: Molecular Function (Shared Triple & Val)")
+Ile_Leu_MF <- create_GO_plot(GO_unique_Leu_Ile, "GO: Molecular Function (Shared Leu & Ile)")
+Common_All_MF <- create_GO_plot(GO_common_all, "GO: Molecular Function (Common All)")
+
+
+create_GO_plot <- function(data, title) {
+  
+  category_data <- data$GO_Biological_Process_2023
+  
+  top_data <- category_data %>%
+    filter(P.value < 0.05 & Combined.Score > 10) %>%
+    arrange(Adjusted.P.value) %>%
+    head(10)
+  
+  plot <- ggplot(top_data, aes(x = reorder(Term, -Combined.Score), y = Combined.Score)) + 
+          geom_col() +
+          coord_flip() +  
+          labs(x = "Term", y = "Combined Score", title = title) +
+          theme_classic(base_size = 12)
+  
+  return(plot)
+}
+
+Leu_BP <- create_GO_plot(GO_unique_Leu, "GO: Biological Process (Unique Leu)")
+Ile_BP <- create_GO_plot(GO_unique_Ile, "GO: Biological Process (Unique Ile)")
+Val_BP <- create_GO_plot(GO_unique_Val, "GO: Biological Process (Unique Val)")
+Triple_BP <- create_GO_plot(GO_unique_Triple, "GO: Biological Process (Unique Triple)")
+Triple_Val_BP <- create_GO_plot(GO_unique_Triple_Val, "GO: Biological Process (Shared Triple & Val)")
+Ile_Leu_BP <- create_GO_plot(GO_unique_Leu_Ile, "GO: Biological Process (Shared Leu & Ile)")
+Common_All_BP <- create_GO_plot(GO_common_all, "GO: Biological Process (Common All)")
+
+grid_MF <- grid.arrange(Leu_MF, Ile_MF, Val_MF, Triple_MF, Triple_Val_MF, Ile_Leu_MF, Common_All_MF, ncol = 2)
+grid_BP <- grid.arrange(Leu_BP, Ile_BP, Val_BP,Triple_BP, Triple_Val_BP, Ile_Leu_BP, Common_All_BP, ncol = 2)
+
+
+
+
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Halflife/GO_MF.png", grid_MF, width = 20, height = 10)
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Halflife/GO_BP.png", grid_BP,  width = 20, height = 10)
+
+```
+
+
+## Amino acid counts
+```{r}
+codons_LN <- as.data.frame(read_excel("C:/Users/worpenbe/Desktop/EPFL/Projects/COMBINATION OF GENOME WIDE STUFF/codon_counts_LNorm_mouse.xlsx"))
+row.names(codons_LN) <- codons_LN$Gene
+codons_LN$Gene <- NULL
+
+### AMINO ACID frequency
+
+##Calculate aa frequency from codon frequency table
+codon_to_aa <- c(
+  GCT="A", GCC="A", GCA="A", GCG="A", # Alanine
+  CGT="R", CGC="R", CGA="R", CGG="R", AGA="R", AGG="R", # Arginine
+  AAT="N", AAC="N", # Asparagine
+  GAT="D", GAC="D", # Aspartic acid
+  TGT="C", TGC="C", # Cysteine
+  CAA="Q", CAG="Q", # Glutamine
+  GAA="E", GAG="E", # Glutamic acid
+  GGT="G", GGC="G", GGA="G", GGG="G", # Glycine
+  CAT="H", CAC="H", # Histidine
+  ATT="I", ATC="I", ATA="I", # Isoleucine
+  TTA="L", TTG="L", CTT="L", CTC="L", CTA="L", CTG="L", # Leucine
+  AAA="K", AAG="K", # Lysine
+  ATG="M", # Methionine
+  TTT="F", TTC="F", # Phenylalanine
+  CCT="P", CCC="P", CCA="P", CCG="P", # Proline
+  TCT="S", TCC="S", TCA="S", TCG="S", AGT="S", AGC="S", # Serine
+  ACT="T", ACC="T", ACA="T", ACG="T", # Threonine
+  TGG="W", # Tryptophan
+  TAT="Y", TAC="Y", # Tyrosine
+  GTT="V", GTC="V", GTA="V", GTG="V", # Valine
+  TAA="*", TAG="*", TGA="*" # Stop codons
+)
+codon_aa_df <- data.frame(codon = names(codon_to_aa), aa = unname(codon_to_aa), stringsAsFactors = FALSE)
+aa_summed <- data.frame(matrix(nrow = nrow(codons_LN), ncol = length(unique(codon_to_aa))))
+colnames(aa_summed) <- sort(unique(codon_to_aa))
+rownames(aa_summed) <- rownames(codons_LN)
+```
+
+```{r}
+for(aa in unique(codon_aa_df$aa)) {
+  codons_for_aa <- codon_aa_df[codon_aa_df$aa == aa, "codon"]
+  valid_codons <- codons_for_aa[codons_for_aa %in% colnames(codons_LN)]
+  aa_summed[, aa] <- rowSums(codons_LN[, valid_codons, drop = FALSE], na.rm = TRUE)
+}
+aa_summed <- aa_summed[,-1]
+  
+Overlap_ctrl=intersect(rownames(aa_summed), Proteome$Gene.Symbol)  
+  Overlap_aa_summed_ctrl=as.data.frame(aa_summed[Overlap_ctrl,]) 
+  ctrl_aa_summed = colMeans(Overlap_aa_summed_ctrl) 
+  ctrl_aa_summed = ctrl_aa_summed/sum(ctrl_aa_summed)
+
+ctrl_aa_sem <- sapply(names(ctrl_aa_summed), function(codon) {
+  SEM <- sd(Overlap_aa_summed_ctrl[[codon]]) / sqrt(length(Overlap_aa_summed_ctrl[[codon]]))
+  return(SEM)
+})
+
+compute_cu_down = function(dati){
+  
+  if (is.character(dati)) {
+    dati <- data.frame(Gene.Symbol = dati, stringsAsFactors = FALSE)
+    print("Data was a list and has been converted to a dataframe.")
+} else {
+    print("Data is not a list. No conversion was done.")
+}
+  
+  dati_sig = as.data.frame(dati)
+  dati <- dati %>%
+  distinct(Gene.Symbol, .keep_all = TRUE)
+  Overlap=intersect(rownames(aa_summed),dati_sig$Gene.Symbol)
+  Overlap_aa_summed=as.data.frame(aa_summed[Overlap,]) 
+  
+  codon_usage = colMeans(Overlap_aa_summed) 
+  codon_usage = codon_usage/sum(codon_usage)
+  
+  SEM <- sapply(names(Overlap_aa_summed), function(codon) {
+    SEM <- sd(Overlap_aa_summed[[codon]]) / sqrt(length(Overlap_aa_summed[[codon]]))
+    return(SEM)
+  })
+  
+  p_values <- sapply(names(Overlap_aa_summed), function(codon) {
+    t_test <- t.test(Overlap_aa_summed[[codon]], Overlap_aa_summed_ctrl[[codon]])
+    return(t_test$p.value)
+  })
+  
+  codon_usage_df <- data.frame(codon_usage, SEM, p_values)
+  rownames(codon_usage_df) <- names(codon_usage)
+  return(codon_usage_df)
+ 
+}
+
+
+
+aa_filtered_all=compute_cu_down(filtered_proteins)
+aa_filtered_up=compute_cu_down(filtered_proteins_up)
+aa_filtered_down=compute_cu_down(filtered_proteins_down)
+unique_degraded_Leu=compute_cu_down(unique_Leu)
+unique_degraded_Ile=compute_cu_down(unique_Ile)
+unique_degraded_Val=compute_cu_down(unique_Val)
+unique_degraded_Triple=compute_cu_down(unique_Triple)
+unique_degraded_Triple_Val=compute_cu_down(exclusive_triple_val)
+unique_degraded_Ile_Leu=compute_cu_down(exclusive_ile_leu)
+common_degraded_ALL=compute_cu_down(common_all)
+
+AA_usage <- data.frame(
+  Ctrl_freq = ctrl_aa_summed,
+  Ctrl_freq_SEM = ctrl_aa_sem,
+  All_freq = aa_filtered_all$codon_usage,
+  All_freq_SEM = aa_filtered_all$SEM,
+  Up_freq = aa_filtered_up$codon_usage,
+  Up_freq_SEM = aa_filtered_up$SEM,
+  Down_freq = aa_filtered_down$codon_usage,
+  Down_freq_SEM = aa_filtered_down$SEM,
+  Leu_deg_freq = unique_degraded_Leu$codon_usage,
+  Leu_deg_freq_SEM = unique_degraded_Leu$SEM,
+  Leu_deg_freq_p = unique_degraded_Leu$p_values,
+  Ile_deg_freq = unique_degraded_Ile$codon_usage,
+  Ile_deg_freq_SEM = unique_degraded_Ile$SEM,
+  Ile_deg_freq_p = unique_degraded_Ile$p_values,
+  Val_deg_freq = unique_degraded_Val$codon_usage,
+  Val_deg_freq_SEM = unique_degraded_Val$SEM,
+  Val_deg_freq_p = unique_degraded_Val$p_values,
+  Triple_deg_freq = unique_degraded_Triple$codon_usage,
+  Triple_deg_freq_SEM = unique_degraded_Triple$SEM,
+  Triple_deg_freq_p = unique_degraded_Triple$p_values,
+  Triple_Val_deg_freq = unique_degraded_Triple_Val$codon_usage,
+  Triple_Val_deg_freq_SEM = unique_degraded_Triple_Val$SEM,
+  Triple_Val_deg_freq_p = unique_degraded_Triple_Val$p_values,
+  Ile_Leu_deg_freq = unique_degraded_Ile_Leu$codon_usage,
+  Ile_Leu_deg_freq_SEM = unique_degraded_Ile_Leu$SEM,
+  Ile_Leu_deg_freq_p = unique_degraded_Ile_Leu$p_values,
+  Common_deg_freq = common_degraded_ALL$codon_usage,
+  Common_deg_freq_SEM = common_degraded_ALL$SEM,
+  Common_deg_freq_p = common_degraded_ALL$p_values,
+  All_freq_p = aa_filtered_all$p_values,
+  Down_freq_p = aa_filtered_down$p_values,
+  Up_freq_p = aa_filtered_up$p_values,
+  aa = rownames(aa_filtered_all)
+)
+
+```
+
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+library(rlang)
+
+freq_columns <- grep("_freq$", names(AA_usage), value = TRUE)
+freq_columns <- freq_columns[!grepl("_p$", freq_columns)]
+freq_columns <- freq_columns[!grepl("Ctrl", freq_columns)] 
+p_value_columns <- sub("_freq$", "_freq_p", freq_columns)
+p_value_columns <- p_value_columns[!grepl("Ctrl", p_value_columns)] 
+
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+
+plots_list <- vector("list", length = length(freq_columns))
+
+for (i in seq_along(freq_columns)) {
+    freq_col <- freq_columns[i]
+    p_val_col <- p_value_columns[i]
+
+    # Use aes with rlang::sym for dynamic column access
+    plot <- ggplot(AA_usage, aes(x = log2(!!sym(freq_col) / AA_usage$Ctrl_freq), 
+                                 y = -log10(!!sym(p_val_col)))) +
+            geom_point(size=2) +
+            geom_text_repel(aes(label = aa),  # Assuming 'aa' is the label column
+                            point.padding = 0.5,
+                            size = 4,
+                            max.overlaps = Inf, force = 5) +
+            theme_classic() +
+            labs(title = paste("AA Frequencies", gsub("_freq", "", freq_col)),
+                 x = "Frequency [log2FC]",
+                 y = "p-value [-log10]") +
+            theme(plot.title = element_text(hjust = 0.5, size = 12), 
+                  axis.title = element_text(size = 14), 
+                  axis.text = element_text(size = 12, color = "black"), 
+                  legend.position = "right", 
+                  legend.title = element_blank(), 
+                  legend.text = element_text(size = 12), 
+                  panel.grid.major = element_blank(), 
+                  panel.grid.minor = element_blank(), 
+                  panel.border = element_blank(), 
+                  panel.background = element_blank(), 
+                  axis.line = element_line(color = "black"), 
+                  axis.ticks = element_line(color = "black")) +
+            guides(fill = guide_legend(override.aes = list(shape = 21))) +
+            geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+            geom_vline(xintercept = 0, linetype = "dashed", color = "black")+
+      xlim(-0.4,0.4)+
+      ylim(0,6)
+
+    # Store the plot in the list
+    plots_list[[i]] <- plot
+}
+
+# Saving the plots to files
+for (i in seq_along(plots_list)) {
+    freq_col <- freq_columns[i]
+    filename <- paste0("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Halflife/plot_", gsub("_freq", "", freq_col), ".png")  # Generate filename
+    ggsave(filename, plot = plots_list[[i]], width = 3, height = 6)  # Save the plot
+}
+
+```
+
+
+```{r}
+library(ggplot2)
+
+# Filter rows for V, L, and I amino acids
+aa_vli <- AA_usage[AA_usage$aa %in% c("V", "L", "I"), ]
+
+# Reshape data for easier plotting
+aa_vli_melted <- melt(aa_vli, id.vars = "aa") %>%
+  separate(variable, into = c("condition", "Type"), sep = "_freq") %>%
+ mutate(Type = ifelse(!Type %in% c("_SEM", "_p"), "freq", Type),  
+         Type = str_replace(Type, "^_", "")) 
+
+aa_vli_pivoted <- aa_vli_melted %>%
+  pivot_wider(names_from = Type, values_from = value) %>%
+  select(aa, condition, freq = freq, SEM = SEM, p = p)
+
+
+library(ggplot2)
+
+
+order_facet1 <- c("Ctrl", "All", "Up", "Down")
+order_facet2 <- c("Ctrl", "Common_deg", "Ile_Leu_deg", "Triple_Val_deg", "Leu_deg", "Ile_deg", "Val_deg", "Triple_deg")
+
+
+# Filter data for order_facet1 conditions
+filtered_data_facet1 <- subset(aa_vli_pivoted, condition %in% order_facet1)
+
+# Convert condition to factor with levels in order_facet1
+filtered_data_facet1$condition <- factor(filtered_data_facet1$condition, levels = order_facet1)
+
+# Create bar plot for order_facet1 conditions
+bar_plot_facet1 <- ggplot(filtered_data_facet1, aes(x = condition, y = freq, fill = aa)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = freq - SEM, ymax = freq + SEM), width = 0.2, position = position_dodge(width = 0.9)) +
+  labs(x = "Condition", y = "Frequency", fill = "Amino Acid") +
+  theme_minimal() +
+  theme(legend.position = "top", 
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  facet_wrap(~ aa, scales = "free_y") +
+  geom_text(data = subset(filtered_data_facet1, p < 0.05), 
+            aes(label = format(p, digits = 2), y = freq + SEM + 0.008),
+            position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
+  geom_text(data = subset(filtered_data_facet1, p >= 0.05), 
+            aes(label = "n.s.", y = freq + SEM + 0.008),
+            position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
+  coord_cartesian(ylim = c(0, NA))  # Remove this line if you want automatic y-axis limits
+
+# Display the bar plot for order_facet1 conditions
+print(bar_plot_facet1)
+
+
+
+# Filter data for order_facet2 conditions
+filtered_data_facet2 <- subset(aa_vli_pivoted, condition %in% order_facet2)
+
+# Convert condition to factor with levels in order_facet2
+filtered_data_facet2$condition <- factor(filtered_data_facet2$condition, levels = order_facet2)
+
+# Create bar plot for order_facet2 conditions
+bar_plot_facet2 <- ggplot(filtered_data_facet2, aes(x = condition, y = freq, fill = aa)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = freq - SEM, ymax = freq + SEM), width = 0.2, position = position_dodge(width = 0.9)) +
+  labs(x = "Condition", y = "Frequency", fill = "Amino Acid") +
+  theme_minimal() +
+  theme(legend.position = "top", 
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  facet_wrap(~ aa, scales = "free_y") +
+  geom_text(data = subset(filtered_data_facet2, p < 0.05), 
+            aes(label = format(p, digits = 2), y = freq + SEM + 0.008),
+            position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
+  geom_text(data = subset(filtered_data_facet2, p >= 0.05), 
+            aes(label = "n.s.", y = freq + SEM + 0.008),
+            position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
+  coord_cartesian(ylim = c(0, NA))  # Remove this line if you want automatic y-axis limits
+
+# Display the bar plot for order_facet2 conditions
+print(bar_plot_facet2)
+
+
+
+
+```
+
+
+
+## Add AA scores to tables
+```{r}
+codons_LN <- codons_LN %>% 
+  rownames_to_column(var = "Gene.Symbol")
+
+codons_common <- codons_LN %>% 
+  filter(Gene.Symbol %in% intersect(codons_LN$Gene.Symbol, Proteome$Gene.Symbol))
+
+Proteome_aaScore <- Proteome[intersect(codons_LN$Gene.Symbol, Proteome$Gene.Symbol), ]
+
+valine_codons <- c("GTT", "GTC", "GTA", "GTG") 
+leucine_codons <- c("TTA", "TTG", "CTT", "CTC", "CTA", "CTG")  
+isoleucine_codons <- c("ATT", "ATC", "ATA")
+
+# Calculate combined scores for each amino acid
+codons_common <- codons_common %>%
+  mutate(
+    Val_score = rowSums(select(., valine_codons), na.rm = TRUE),
+    Leu_score = rowSums(select(., leucine_codons), na.rm = TRUE),
+    Ile_score = rowSums(select(., isoleucine_codons), na.rm = TRUE)
+  )%>% 
+  select(Gene.Symbol, Val_score, Leu_score, Ile_score)
+
+Proteome_aaScore <- merge(codons_common, Proteome_aaScore, by = "Gene.Symbol", all = TRUE)
+```
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+
+# Function to create a plot for a given amino acid score
+create_plot <- function(data, score_column, aa_name) {
+  correlation <- cor(data[[score_column]], log2(data$Average_Ctrl))
+  
+  plot <- ggplot(data, aes_string(x = score_column, y = "log2(Average_Ctrl)")) +
+    geom_point(alpha=0.2) +
+    geom_smooth(method = "lm", se = FALSE, color = "red") +
+    labs(x = paste(aa_name, "frequency [%]"), y = "Intensity [Ctrl; log2]",
+         title = paste(aa_name, "content vs intensity")) +
+    theme_classic() +
+    theme(axis.text.x = element_text(hjust = 1, color = "black", size = 12),
+          axis.text.y = element_text(color = "black", size = 12),
+          axis.title.x = element_text(color = "black", size = 14),
+          axis.title.y = element_text(color = "black", size = 14),
+          plot.title = element_text(color = "black", size = 16, hjust = 0.5),
+          axis.line = element_line(color = "black")) +
+    annotate("text", x = Inf, y = Inf, label = paste("r =", round(correlation, 3)), 
+             hjust = 1.1, vjust = 1.1, size = 5, color = "red") +
+    guides(fill = FALSE)
+  
+  return(plot)
+}
+
+# Create plots
+plot_leu <- create_plot(Proteome_aaScore, "Leu_score", "Leu")
+plot_ile <- create_plot(Proteome_aaScore, "Ile_score", "Ile")
+plot_val <- create_plot(Proteome_aaScore, "Val_score", "Val")
+
+# Arrange the plots in a grid
+plot_grid <- grid.arrange(plot_leu, plot_ile, plot_val, ncol = 3)
+
+# Save the grid to a file
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/AA scores/aa_scores vs Ctrl intensity.png", plot_grid, width = 15, height = 5, units = "in")
+
+create_plot <- function(data, score_column, aa_name) {
+  mean_column <- paste(aa_name, "_mean", sep="")
+  correlation <- cor(data[[score_column]], data[[mean_column]])
+  
+plot <- ggplot(data, aes_string(x = score_column, y = mean_column)) +
+    geom_point(alpha=0.2) +
+    geom_smooth(method = "lm", se = FALSE, color = "red") +
+    labs(x = paste(aa_name, "frequency [%]"), y = paste("log2FC [", aa_name, "]", sep=""),
+         title = paste(aa_name, "content vs intensity")) +
+    theme_classic() +
+    theme(axis.text.x = element_text(hjust = 1, color = "black", size = 12),
+          axis.text.y = element_text(color = "black", size = 12),
+          axis.title.x = element_text(color = "black", size = 14),
+          axis.title.y = element_text(color = "black", size = 14),
+          plot.title = element_text(color = "black", size = 16, hjust = 0.5),
+          axis.line = element_line(color = "black")) +
+    annotate("text", x = Inf, y = Inf, label = paste("r =", round(correlation, 3)), 
+             hjust = 1.1, vjust = 1.1, size = 5, color = "red") +
+    guides(fill = FALSE)
+  
+  return(plot)
+}
+
+# Create plots
+plot_leu <- create_plot(Proteome_aaScore, "Leu_score", "Leu")
+plot_ile <- create_plot(Proteome_aaScore, "Ile_score", "Ile")
+plot_val <- create_plot(Proteome_aaScore, "Val_score", "Val")
+
+# Arrange the plots in a grid
+plot_grid <- grid.arrange(plot_leu, plot_ile, plot_val, ncol = 3)
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/AA scores/aa_scores vs log2FC intensity.png", plot_grid, width = 15, height = 5, units = "in")
+```

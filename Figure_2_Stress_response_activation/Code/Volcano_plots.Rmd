@@ -1,0 +1,701 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#Vulcano plots
+
+```{r}
+library(openxlsx)
+library(ggrepel)
+library(ggplot2)
+library(dplyr)
+
+cpm_all <- read.xlsx("../../General_datasets/log2CPMs.xlsx" )
+EdgeR_all <- read.xlsx("../../General_datasets/log2FC_pValue.xlsx")
+
+
+row.names(EdgeR_all) <- EdgeR_all$Gene
+EdgeR_all <- EdgeR_all %>%
+  rename_with(~sub("_FDR$", "_PValue", .))
+
+create_volcano_plot <- function(data, dep, type, title) {
+suffix <- switch(type,
+                     "RNA" = "RNA",
+                     "RPF" = "RPF", 
+                     "TE" = "TE")
+    
+    up_color <- "#B2182B"
+    up_shape <- 19
+    down_color <- "#2166AC"
+    down_shape <- 19
+    ns_color <- "gray19"
+    ns_shape <- 21
+
+    # Calculate the y-axis limit
+    min_pvalue <- min(data[[paste0(suffix, "_", dep, "_PValue")]], na.rm = TRUE)
+    y_axis_limit <- c(0, -log10(min_pvalue) + 5)
+
+    # Classify data points
+    data <- data %>%
+        mutate(Type = ifelse(get(paste0(suffix, "_", dep, "_PValue")) < 0.05 & get(paste0(suffix, "_", dep, "_logFC")) > 0.58, "up",
+                             ifelse(get(paste0(suffix, "_", dep, "_PValue")) < 0.05 & get(paste0(suffix, "_", dep, "_logFC")) < -0.58, "down", "N.S.")))
+
+    up_count <- sum(data$Type == "up", na.rm = TRUE)
+    down_count <- sum(data$Type == "down", na.rm = TRUE)
+    
+    # Filter outliers for annotation
+    outlier_limit <- 1.1
+    outlier_data <- subset(data, get(paste0(suffix, "_", dep, "_PValue")) < 0.01 & abs(get(paste0(suffix, "_", dep, "_logFC"))) > outlier_limit)
+
+     plot <- ggplot(data, aes(x = get(paste0(suffix, "_", dep, "_logFC")), y = -log10(get(paste0(suffix, "_", dep, "_PValue"))))) +
+        geom_point(aes(color = Type, shape = Type, fill = Type), size = 3, alpha = 0.3) +
+        scale_color_manual(values = c("N.S." = ns_color, "up" = up_color, "down" = down_color)) +
+        scale_shape_manual(values = c("N.S." = ns_shape, "up" = up_shape, "down" = down_shape)) +
+        scale_fill_manual(values = c("N.S." = ns_color, "up" = up_color, "down" = down_color)) +
+        theme_minimal() +
+        labs(title = title, x = expression(Log[2]*FC), y = expression("-" * Log[10] * " P value")) +
+        theme(plot.title = element_text(hjust = 0.5, size = 18), 
+              axis.title = element_text(size = 14, face = "bold"), 
+              axis.text = element_text(size = 12, color = "black"), 
+              legend.position = "top", legend.title = element_blank(), 
+              legend.text = element_text(size = 12), 
+              panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+              panel.border = element_blank(), panel.background = element_blank(), 
+              axis.line = element_line(color = "black"), 
+              axis.ticks = element_line(color = "black")) +
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+        geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+        lims(y = y_axis_limit) +
+      #  coord_cartesian(xlim = c(-3, 3)) +
+      #  scale_x_continuous(breaks = seq(-3, 3, by = 1)) +
+        geom_text(x = 0, y = -log10(min_pvalue) + 1, 
+                  label = paste("Up (n =", up_count, ")"), hjust = -0.2, vjust = -2, size = 3, color = up_color) +
+        geom_text(x = 0, y = -log10(min_pvalue) + 1, 
+                  label = paste("Down (n =", down_count, ")"), hjust = 1.1, vjust = -2, size = 3, color = down_color)
+
+    # Add outlier annotations if any
+    if (nrow(outlier_data) > 0) {
+        plot <- plot + geom_text_repel(data = outlier_data,
+                                       aes(label = rownames(outlier_data), x = get(paste0(suffix, "_", dep, "_logFC")), y = -log10(get(paste0(suffix, "_", dep, "_PValue")))),
+                                       size = 3, box.padding = 0.35, point.padding = 0.5, segment.color = 'grey50', max.overlaps = 10)
+    }
+print(plot)
+    ggsave(paste0("../Volcano plots/Plots/Volcano/", title, ".png"), plot, units = "in", height = 4, width = 4 ) 
+    save(plot, file= paste0("../Volcano plots/Plots/Volcano/", title, ".RData")) 
+    
+     return(data.frame(Type = type, Condition = dep, Up = up_count, Down = down_count))
+}
+
+conditions <- c("Leu", "Ile", "Val", "Double", "Triple")
+counts_list <- list()
+
+for (cond in conditions) {
+    counts_list[[length(counts_list) + 1]] <- create_volcano_plot(EdgeR_all, cond, "RNA", paste("RNA", cond, "vs. Ctrl"))
+    counts_list[[length(counts_list) + 1]] <- create_volcano_plot(EdgeR_all, cond, "RPF", paste("RPF", cond, "vs. Ctrl"))
+    counts_list[[length(counts_list) + 1]] <- create_volcano_plot(EdgeR_all, cond, "TE", paste("TE", cond, "vs. Ctrl"))
+}
+
+counts_df <- do.call(rbind, counts_list)
+counts_long <- counts_df %>%
+    pivot_longer(cols = c("Up", "Down"), names_to = "Direction", values_to = "Count") %>%
+    mutate(Condition = factor(Condition, levels = c("Leu", "Ile", "Val", "Double", "Triple")))
+
+counts_long_TE <- counts_long %>%
+  filter(Type=="TE")
+
+counts_long_RNA_RPF <- counts_long %>%
+  filter(!Type=="TE")
+
+Counts_RNA_RPF <- ggplot(counts_long_RNA_RPF, aes(x = Condition, y = Count, fill = Direction)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black")+
+  geom_text(aes(label = Count, y=0, hjust = 0), position = position_dodge(width = 0.9), angle = 90, color = "white", size = 4) +
+    facet_wrap(~Type) +
+    theme_classic() +
+    labs(title = "Amount disregulated transcripts", x = "Condition", y = "Count") +
+    scale_fill_manual(values = c("Up" = "darkred", "Down" = "darkblue")) +
+    theme(plot.title = element_text(hjust = 0.5, size = 18, family = "Arial", color = "black"), 
+          axis.title = element_text(size = 14, face = "bold", family = "Arial", color = "black"), 
+          axis.text.x = element_text(size = 12, color = "black", angle = 45, hjust = 1, vjust = 1, family = "Arial"), 
+          axis.text.y = element_text(size = 12, color = "black", family = "Arial"), 
+          legend.position = "top", legend.title = element_blank(), 
+          legend.text = element_text(size = 12, family = "Arial", color = "black"), 
+          axis.line = element_line(color = "black"),
+          axis.ticks = element_line(color = "black"),
+          strip.text = element_text(size = 14, family = "Arial", color = "black"))
+
+ggsave("../Volcano plots/Plots/Counts_UP_DOWN_RNA_RPF.png", Counts_RNA_RPF)
+save(Counts_RNA_RPF, file="../Volcano plots/Plots/Counts_UP_DOWN_RNA_RPF.RData")
+
+Counts_TE <- ggplot(counts_long_TE, aes(x = Condition, y = Count, fill = Direction)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black")+
+  geom_text(aes(label = Count, y=0, hjust = 0), position = position_dodge(width = 0.9), angle = 90, color = "white", size = 4) +
+    facet_wrap(~Type) +
+    theme_classic() +
+    labs(title = "Amount disregulated transcripts", x = "Condition", y = "Count") +
+    scale_fill_manual(values = c("Up" = "darkred", "Down" = "darkblue")) +
+    theme(plot.title = element_text(hjust = 0.5, size = 18, family = "Arial", color = "black"), 
+          axis.title = element_text(size = 14, face = "bold", family = "Arial", color = "black"), 
+          axis.text.x = element_text(size = 12, color = "black", angle = 45, hjust = 1, vjust = 1, family = "Arial"), 
+          axis.text.y = element_text(size = 12, color = "black", family = "Arial"), 
+          legend.position = "top", legend.title = element_blank(), 
+          legend.text = element_text(size = 12, family = "Arial", color = "black"), 
+          axis.line = element_line(color = "black"),
+          axis.ticks = element_line(color = "black"),
+          strip.text = element_text(size = 14, family = "Arial", color = "black"))
+
+ggsave("../Volcano plots/Plots/Counts_UP_DOWN_TE.png", Counts_TE)
+save(Counts_TE, file="../Volcano plots/Plots/Counts_UP_DOWN_TE.RData")
+```
+
+
+####Overlap graphs with UpsetR
+```{r}
+# Load necessary libraries
+library(ggupset)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+library(purrr) 
+
+# Define the function
+UpsetR_plot <- function(suffix) {
+  conditions <- c("Leu", "Ile", "Val", "Triple", "Double")
+  
+  # Initialize lists to store genes
+  list_up <- list()
+  list_down <- list()
+  list_all <- list()
+  
+  # Loop over conditions to extract genes
+  for (cond in conditions) {
+    up_genes <- EdgeR_all %>%
+      filter(
+        .data[[paste0(suffix, cond, "_logFC")]] > 0.58 & 
+        .data[[paste0(suffix, cond, "_PValue")]] < 0.05
+      ) %>%
+      pull(Gene)
+    
+    down_genes <- EdgeR_all %>%
+      filter(
+        .data[[paste0(suffix, cond, "_logFC")]] < -0.58 & 
+        .data[[paste0(suffix, cond, "_PValue")]] < 0.05
+      ) %>%
+      pull(Gene)
+    
+    all_genes <- EdgeR_all %>%
+      filter(
+        (abs(.data[[paste0(suffix, cond, "_logFC")]]) > 0.58) & 
+        .data[[paste0(suffix, cond, "_PValue")]] < 0.05
+      ) %>%
+      pull(Gene)
+    
+    list_up[[cond]] <- up_genes
+    list_down[[cond]] <- down_genes
+    list_all[[cond]] <- all_genes
+  }
+  
+  # Function to create and save ggupset plots
+plot_lists <- function(gene_list, plot_name, color) {
+  df <- tibble(
+    Genes = unlist(gene_list),
+    Condition = rep(names(gene_list), times = sapply(gene_list, length))
+  ) %>%
+    group_by(Genes) %>%
+    summarize(Condition = list(unique(Condition))) %>%
+    ungroup()
+
+plot <- ggplot(df, aes(x = Condition)) +
+  geom_bar(fill = color) +
+  scale_x_upset(n_intersections = 6, order_by = "freq") +
+  theme_classic() +
+  labs(title = plot_name, x = "Condition", y = "Number of Genes") +
+  theme(
+    text = element_text(family = "Arial", color = "black", size = 14),
+    plot.title = element_text(size = 14, face = "bold", family = "Arial", color = "black"),
+    axis.title = element_text(size = 14, family = "Arial", color = "black"),
+    axis.text = element_text(size = 14, family = "Arial", color = "black"),
+    axis.text.y = element_text(size = 14, family = "Arial", color = "black")
+  )
+  # Save the plot
+  ggsave(filename = paste0("../Volcano plots/Plots/Overlaps/", plot_name, ".png"),
+         plot = plot, units = "in", height = 3.5, width = 3, dpi = 300)
+  save(plot, file = paste0("../Volcano plots/Plots/Overlaps/", plot_name, ".RData"))
+}
+  # Generate and save plots
+plot_lists(list_up, paste0("Upregulated_Genes_in_", suffix), "darkred")
+plot_lists(list_down, paste0("Downregulated_Genes_in_", suffix), "darkblue")
+plot_lists(list_all, paste0("All_Significant_Genes_in_", suffix), "gray")
+  
+  # Return the lists of genes
+  return(list(
+    upregulated = list_up,
+    downregulated = list_down,
+    all_significant = list_all
+  ))
+
+
+}
+
+# Run the function for each dataset
+results_RNA <- UpsetR_plot("RNA_")
+results_RPF <- UpsetR_plot("RPF_")
+results_TE  <- UpsetR_plot("TE_")
+
+```
+
+
+### GO terms
+```{r}
+
+
+only_Ile <- setdiff(
+  TE_Upregulated$Ile,
+  union(
+    TE_Upregulated$Leu,
+    union(TE_Upregulated$Val, union(TE_Upregulated$Triple, TE_Upregulated$Double))
+  )
+)
+only_Ile
+
+
+
+All_TE <- results_TE$all_significant
+common_all_TE <- Reduce(intersect, All_TE)
+
+Up_TE <- results_TE$upregulated
+Up_TE <- Reduce(intersect, Up_TE)
+
+Down_TE <- results_TE$downregulated
+Down_TE <- Reduce(intersect, Down_TE)
+
+All_RNA <- results_RNA$all_significant
+common_all_RNA <- Reduce(intersect, All_RNA)
+All_RPF <- results_RPF$all_significant
+common_all_RPF <- Reduce(intersect, All_RPF)
+
+up_RNA <- results_RNA$upregulated
+common_up_RNA <- Reduce(intersect, up_RNA)
+up_RPF <- results_RPF$upregulated
+common_up_RPF <- Reduce(intersect, up_RPF)
+
+down_RNA <- results_RNA$downregulated
+common_down_RNA <- Reduce(intersect, down_RNA)
+down_RPF <- results_RPF$downregulated
+common_down_RPF <- Reduce(intersect, down_RPF)
+
+
+find_genes_only_in_condition <- function(condition_name, all_conditions_list) {
+  condition_genes <- all_conditions_list[[condition_name]]
+  other_conditions <- setdiff(names(all_conditions_list), condition_name)
+  Other_genes <- unlist(all_conditions_list[other_conditions])
+  genes_only_in_condition <- setdiff(condition_genes, Other_genes)
+  return(genes_only_in_condition)
+}
+
+Val_RNA <- find_genes_only_in_condition("Val", All_RNA)
+Ile_RNA <- find_genes_only_in_condition("Ile", All_RNA)
+Val_RPF <- find_genes_only_in_condition("Val", All_RPF)
+Ile_RPF <- find_genes_only_in_condition("Ile", All_RPF)
+
+
+dbs <- listEnrichrDbs()
+dbb <- dbs$libraryName[grep("GO_Biological_Process_2023", dbs$libraryName)]
+
+GO_RNA <- enrichr(common_all_RNA, databases = dbb)
+GO_RPF <- enrichr(common_all_RPF, databases = dbb)
+GO_Val_RPF <- enrichr(Val_RPF, databases = dbb)
+GO_Val_RNA <- enrichr(Val_RNA, databases = dbb)
+GO_Ile_RPF <- enrichr(Ile_RPF, databases = dbb)
+GO_Ile_RNA <- enrichr(Ile_RNA, databases = dbb)
+
+GO_up_RNA <- enrichr(common_up_RNA, databases = dbb)
+GO_up_RPF <- enrichr(common_up_RPF, databases = dbb)
+GO_down_RNA <- enrichr(common_down_RNA, databases = dbb)
+GO_down_RPF <- enrichr(common_down_RPF, databases = dbb)
+
+process_GO_data <- function(go_data, prefix) {
+  df <- go_data$GO_Biological_Process_2023
+  df <- df[, c("Term", "Adjusted.P.value", "Combined.Score")]
+  colnames(df)[colnames(df) == "Adjusted.P.value"] <- paste0(prefix, "_p.adj")
+  colnames(df)[colnames(df) == "Combined.Score"] <- paste0(prefix, "_score")
+  return(df)
+}
+
+go_data_list <- list(
+  GO_RNA = list(data = GO_RNA, prefix = "RNA_all"),
+  GO_RPF = list(data = GO_RPF, prefix = "RPF_all"),
+    GO_up_RNA = list(data = GO_up_RNA, prefix = "RNA_up"),
+  GO_up_RPF = list(data = GO_up_RPF, prefix = "RPF_up"),
+    GO_down_RNA = list(data = GO_down_RNA, prefix = "RNA_down"),
+  GO_down_RPF = list(data = GO_down_RPF, prefix = "RPF_down"),
+  GO_Val_RPF = list(data = GO_Val_RPF, prefix = "RPF_Val"),
+  GO_Val_RNA = list(data = GO_Val_RNA, prefix = "RNA_Val"),
+  GO_Ile_RPF = list(data = GO_Ile_RPF, prefix = "RPF_Ile"),
+  GO_Ile_RNA = list(data = GO_Ile_RNA, prefix = "RNA_Ile")
+)
+
+processed_GO_list <- lapply(go_data_list, function(x) {
+  process_GO_data(x$data, x$prefix)
+})
+
+merged_GO <- Reduce(function(x, y) merge(x, y, by = "Term", all = TRUE), processed_GO_list)
+
+```
+
+### Plot GO data (only for common genes)
+```{r}
+plot_data <- merged_GO %>%
+  select(Term, RNA_all_p.adj, RPF_all_p.adj) %>%
+  na.omit()
+
+#Filter for terms to include
+top10_RNA <- plot_data %>%
+  filter(!is.na(RNA_all_p.adj)) %>%
+  arrange(RNA_all_p.adj) %>%
+  slice(1:10)
+
+top10_RPF <- plot_data %>%
+  filter(!is.na(RPF_all_p.adj)) %>%
+  arrange(RPF_all_p.adj) %>%
+  slice(1:10)
+
+top10_RPF_unique <- top10_RPF %>%
+  filter(!Term %in% top10_RNA$Term)
+ordered_terms <- c(top10_RNA$Term, top10_RPF_unique$Term)
+
+#Prepare data
+plot_data_top <- plot_data %>%
+  filter(Term %in% ordered_terms)
+
+plot_data_long <- plot_data_top %>%
+  pivot_longer(
+    cols = c("RNA_all_p.adj", "RPF_all_p.adj"),
+    names_to = "Dataset",
+    values_to = "p.adj"
+  ) %>%
+  mutate(Dataset = gsub("_p\\.adj", "", Dataset))
+
+plot_data_long$Term <- factor(plot_data_long$Term, levels = rev(ordered_terms))
+
+min_nonzero_padj <- min(plot_data_long$p.adj[plot_data_long$p.adj > 0], na.rm = TRUE)
+
+# Transform p.adj values
+plot_data_long <- plot_data_long %>%
+  mutate(
+    p.adj_replaced = ifelse(p.adj == 0, min_nonzero_padj, p.adj),
+    log_padj = -log10(p.adj_replaced)
+  )
+
+library(stringr)
+plot_data_long$Term_clean <- sub("\\s*\\(.*\\)$", "", plot_data_long$Term)
+plot_data_long$Term_clean <- str_wrap(plot_data_long$Term_clean, width = 30)
+
+ordered_terms_clean <- sub("\\s*\\(.*\\)$", "", ordered_terms)
+ordered_terms_clean <- str_wrap(ordered_terms_clean, width = 30)
+plot_data_long$Term_clean <- factor(plot_data_long$Term_clean, levels = rev(ordered_terms_clean))
+
+Terms<-ggplot(plot_data_long, aes(x = Dataset, y = Term_clean, fill = log_padj)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(
+    low = "white", high = "darkred", na.value = "grey90",
+    name = expression(-log[10](italic(p)[adj]))
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.y = element_blank()
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = "Top GO Terms for RNA and RPF Datasets",
+    subtitle = "Colored by Adjusted p-value (-log10 scale)"
+  )
+
+ggsave(filename = "../Volcano plots/Plots/Overlaps/Terms.png",plot = Terms, units = "in",height = 5,width = 5, dpi = 300)
+save(Terms, file = "../Volcano plots/Plots/Overlaps/Terms.RData")
+```
+
+
+## HEATMAP TE changes
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+only_Ile <- c("Rps10", "Rpl27", "Fau", "Rps11", "Rpl3", "Rplp0", "Rpl29")
+
+EdgeR_filtered <- EdgeR_all %>%
+ # filter(Gene %in% only_Ile)
+  filter (Gene %in% common_all_TE)
+
+# Define conditions and create column name vectors
+conditions <- c("Leu", "Ile", "Val", "Double", "Triple")
+
+RNA_logFC_cols <- paste0("RNA_", conditions, "_logFC")
+RPF_logFC_cols <- paste0("RPF_", conditions, "_logFC")
+TE_logFC_cols  <- paste0("TE_", conditions, "_logFC")
+
+# Select necessary columns including TE
+EdgeR_selected <- EdgeR_filtered %>%
+  select(Gene, all_of(RNA_logFC_cols), all_of(RPF_logFC_cols), all_of(TE_logFC_cols))
+
+# Transform to long format
+EdgeR_long <- EdgeR_selected %>%
+  pivot_longer(
+    cols = -Gene,
+    names_to = c("DataType", "Condition", "Measure"),
+    names_sep = "_"
+  ) %>%
+  filter(Measure == "logFC") %>%
+  select(-Measure) %>%
+  mutate(
+    Condition = factor(Condition, levels = conditions),
+    DataType = factor(DataType, levels = c("RNA", "RPF", "TE")),
+    Condition_DataType = paste(Condition, DataType, sep = "_")
+  )
+
+# Set the order for Condition_DataType
+EdgeR_long$Condition_DataType <- factor(
+  EdgeR_long$Condition_DataType,
+  levels = c(
+    paste(conditions, "RNA", sep = "_"),
+    paste(conditions, "RPF", sep = "_"),
+    paste(conditions, "TE", sep = "_")
+  )
+)
+
+# Prepare data for clustering
+EdgeR_wide <- EdgeR_long %>%
+  select(Gene, Condition_DataType, value) %>%
+  pivot_wider(names_from = Condition_DataType, values_from = value)
+
+EdgeR_wide[is.na(EdgeR_wide)] <- 0
+
+EdgeR_wide_matrix <- as.matrix(EdgeR_wide[, -1])
+rownames(EdgeR_wide_matrix) <- EdgeR_wide$Gene
+
+gene_dist <- dist(EdgeR_wide_matrix)
+gene_cluster <- hclust(gene_dist, method = "average")
+gene_order <- gene_cluster$labels[gene_cluster$order]
+
+# Create the heatmap with the annotation rectangle covering the block
+Heatmap <- ggplot(EdgeR_long, aes(x = Condition_DataType, y = Gene, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low = "blue", mid = "white", high = "red", midpoint = 0,
+    name = "log2FC"
+  ) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme_classic() +
+  theme(
+    text = element_text(family = "Arial", color = "black", size = 14),
+    axis.text.y = element_text(size = 12, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10, color = "black"),
+    panel.grid = element_blank()
+  ) +
+  labs(
+    x = "Condition and Data Type",
+    y = "Gene",
+    title = "Log2 Fold Changes of RNA, RPF, and TE Levels"
+  )+
+  coord_flip()
+Heatmap
+
+ggsave2("../../Figure 2_Stress response activation/Volcano plots/Plots/Heatmap_Common.png", Heatmap, width = 12, height = 4, dpi = 300, units = "in")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Heatmap with k-cluster
+```{r}
+filtered_df <- EdgeR_all %>%
+  select(-starts_with("RNA"), -starts_with("RPF"), -starts_with("flux"))
+
+conditions <- c("Leu", "Ile", "Val", "Triple", "Double")
+treatments <- c("TE")
+
+# Create a logical vector to store which rows meet the criteria
+row_meets_criteria <- rep(FALSE, nrow(filtered_df))
+
+for (cond in conditions) {
+  for (treat in treatments) {
+    logFC_col <- paste0(treat, "_", cond, "_logFC")
+    pValue_col <- paste0(treat, "_", cond, "_PValue")
+    
+    # Update the logical vector if the criteria are met
+    row_meets_criteria <- row_meets_criteria | ((filtered_df[[logFC_col]] > 0.58 | filtered_df[[logFC_col]] < -0.58) & filtered_df[[pValue_col]] < 0.05)
+  }
+}
+
+filtered_df <- filtered_df[row_meets_criteria, ]
+filtered_df<- filtered_df %>% select(contains("logFC"))
+
+# Check for and handle NA/NaN/Inf values
+if(any(is.na(filtered_df)) || any(is.nan(filtered_df)) || any(is.infinite(filtered_df))) {
+  # Remove rows with NA, NaN, or Inf values
+  filtered_df <- filtered_df[complete.cases(filtered_df), ]
+}
+
+
+# Perform k-means clustering
+k <-10  # Set the number of clusters
+set.seed(1234)  # Set seed for reproducibility
+
+dataMatrix <- as.matrix(filtered_df)
+
+
+
+# Perform k-means clustering
+kmeans_result <- kmeans(dataMatrix, centers = k)
+filtered_df$cluster <- kmeans_result$cluster
+order_dat <- data.frame(cluster = filtered_df$cluster, row.names = rownames(filtered_df))
+order_index <- order(order_dat$cluster)
+ordered_dataMatrix <- dataMatrix[order_index, ]
+annotation_row <- order_dat[order_index, , drop = FALSE]
+
+# Create the heatmap
+Heatmap <- pheatmap(ordered_dataMatrix, 
+                  #  annotation_row = annotation_row, 
+                    cluster_rows = FALSE,
+                    scale = "none",
+                    color = colorRampPalette(c("darkblue", "white", "darkred"))(500),
+                    main = "Vulcano plot_selected",
+                    legend = TRUE,
+                   # show_rownames = FALSE,
+                    cellwidth = 15,
+                    breaks = seq(-2.5, 2.5, length.out = 500))
+```
+
+
+```{r}
+# Save the heatmap
+png("C:/Users/worpenbe/Desktop/EPFL/Projects/Polysome profile/NGS_Riboseq_starvations_28.11.2023/Results/Analysis/plot/vulcano/heatmap.png", width = 300, height = 300)
+print(Heatmap)
+dev.off()
+```
+## Boxplot of KClusters
+```{r}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(ggpattern)
+
+selected_long <- reshape2::melt(filtered_df, id.vars = "cluster", variable.name = "Condition", value.name = "log2FC")
+
+selected_long <- subset(selected_long, grepl("logFC", Condition))
+selected_long$Condition <- sub("_logFC$", "", selected_long$Condition)
+selected_long <- selected_long %>%
+  separate(Condition, into = c("Type", "Condition"), sep = "_", remove = FALSE)
+
+levels_order <- c("Leu", "Ile", "Val", "Triple")
+selected_long$Condition <- factor(selected_long$Condition, levels = levels_order)
+
+my_colors <- c("Leu" = "lightblue", "Ile" = "cyan3", "Val" = "darkgreen", "Triple" = "darkred")
+
+p <- ggplot(selected_long, aes(x = factor(cluster), y = log2FC, fill = Condition)) +
+  geom_boxplot_pattern(aes(pattern = Type), outlier.shape = NA, pattern_density = 0.2, width = 0.7) +
+  scale_fill_manual(values = my_colors) + # Apply custom colors
+  facet_wrap(~cluster, scales = "free") +
+  labs(x = "Cluster", y = "Log2 Fold Change", title = "Log2FC Values by Cluster and Condition") +
+  theme_minimal(base_size = 16) + # Increase base text size
+  theme(
+    text = element_text(color = "black"), # Set text color to black
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 14), # Customize x-axis text
+    axis.text.y = element_text(size = 14), # Customize y-axis text
+    legend.text = element_text(size = 14), # Customize legend text size
+    panel.background = element_rect(fill = "white", colour = "white") # Set background to white
+  )
+print(p)
+
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Polysome profile/NGS_Riboseq_starvations_28.11.2023/Results/Analysis/plot/vulcano/cluster/mean_boxplot.png", p, width = 15, height = 10, dpi = 300)
+
+
+```
+
+
+```{r}
+library(enrichR)
+library(ggplot2)
+library(dplyr)
+
+filtered_df$gene_name <- row.names(filtered_df)
+list_clusters <- split(filtered_df$gene_name, filtered_df$cluster)
+genes_list <- list()
+
+for (cluster in names(list_clusters)) {
+  genes_list[[cluster]] <- c(list_clusters[[cluster]], rep(NA, max(lengths(list_clusters)) - length(list_clusters[[cluster]])))
+}
+
+genes_list <- as.data.frame(genes_list)
+
+conditions <- paste0("X", seq(k))
+
+dbs <- listEnrichrDbs()
+dbb <- dbs$libraryName[grep('GO_.+2023|KEGG_2019.+Mouse', dbs$libraryName)]
+
+for (cond in conditions) {
+  GO <- enrichr(genes_list[[cond]], databases = dbb)
+  
+    top_terms <- GO$KEGG_2019_Mouse %>%
+      filter(Adjusted.P.value < 0.05) %>%  # Filter by Adjusted P-value
+      arrange(Adjusted.P.value) %>%  # Sort by Combined Score
+      head(15)  # Get the top 10
+    
+   plot <- ggplot(top_terms, aes(x = reorder(Term, -Combined.Score), y = Combined.Score)) + 
+      geom_col() +
+      coord_flip() +  
+      labs(x = "Term", y = "Combined Score", title = paste("Top EnrichR Terms:", cond)) +  # Fixed the parenthesis here
+      theme_minimal()
+  
+print(plot)
+
+file_path <- paste0("C:/Users/worpenbe/Desktop/EPFL/Projects/Polysome profile/NGS_Riboseq_starvations_28.11.2023/Results/Analysis/plot/vulcano/cluster/KEGG_cluster_",cond, ".png")
+ if (!dir.exists(dirname(file_path))) {
+    dir.create(dirname(file_path), recursive = TRUE)
+ }
+ggsave(file_path, plot = plot, width = 8, height = 5, units = "in")
+}
+
+```
+
+

@@ -1,0 +1,362 @@
+## Overlap plots: Significance
+
+
+```{r}
+# Total positions (codons not nt): 1181000
+# Total transcripts: 4123
+
+# phyper(q, m, n, k, lower.tail = FALSE)
+# q = overlap - 1
+# m = size of set A
+# n = total population - m
+# k = size of set B
+# lower.tail = FALSE → gives P(X ≥ observed)
+
+phyper(overlap - 1, size_A, universe_size - size_A, size_B, lower.tail = FALSE)
+```
+
+```{r}
+# Define input values
+position_universe <- 1181000
+position_sets <- list(Ile = 4834, Val = 11953, Triple = 7722)
+position_overlaps <- list(
+  Ile_Val = 118,
+  Ile_Triple = 149,
+  Val_Triple = 2522
+)
+
+transcript_universe <- 4123
+transcript_sets <- list(Ile = 2340, Val = 3197, Triple = 2757)
+transcript_overlaps <- list(
+  Ile_Val = 2033,
+  Ile_Triple = 1806,
+  Val_Triple = 2478
+)
+
+# Function to compute hypergeometric p-value
+calc_pval <- function(overlap, set_a_size, set_b_size, universe) {
+  phyper(overlap - 1, set_b_size, universe - set_b_size, set_a_size, lower.tail = FALSE)
+}
+
+# Store intermediate results
+all_results <- list()
+
+# Position results
+for (name in names(position_overlaps)) {
+  sets <- unlist(strsplit(name, "_"))
+  a <- sets[1]
+  b <- sets[2]
+  pval <- calc_pval(position_overlaps[[name]], position_sets[[a]], position_sets[[b]], position_universe)
+
+  all_results[[paste0("pos_", name)]] <- data.frame(
+    Type = "Position",
+    Set_A = a,
+    Set_B = b,
+    Set_A_Size = position_sets[[a]],
+    Set_B_Size = position_sets[[b]],
+    Overlap = position_overlaps[[name]],
+    Universe = position_universe,
+    P_Value = pval
+  )
+}
+
+# Transcript results
+for (name in names(transcript_overlaps)) {
+  sets <- unlist(strsplit(name, "_"))
+  a <- sets[1]
+  b <- sets[2]
+  pval <- calc_pval(transcript_overlaps[[name]], transcript_sets[[a]], transcript_sets[[b]], transcript_universe)
+
+  all_results[[paste0("tx_", name)]] <- data.frame(
+    Type = "Transcript",
+    Set_A = a,
+    Set_B = b,
+    Set_A_Size = transcript_sets[[a]],
+    Set_B_Size = transcript_sets[[b]],
+    Overlap = transcript_overlaps[[name]],
+    Universe = transcript_universe,
+    P_Value = pval
+  )
+}
+
+# Combine into a single data.frame
+results_df <- do.call(rbind, all_results)
+
+# Add BH-adjusted p-values
+results_df$Adjusted_P_Value <- p.adjust(results_df$P_Value, method = "BH")
+
+# View results
+print(results_df)
+```
+
+
+
+
+############# p-vaéues of overlap stalling transcripts with downregulated proteins######################
+## Comparison of stalling with Proteome
+```{r}
+load("../Data/Double_FC_stalling.RData")
+load("../Data/Triple_FC_stalling.RData")
+load("../Data/Val_FC_stalling.RData")
+load("../Data/Ile_FC_stalling.RData")
+load("../Data/Leu_FC_stalling.RData")
+
+Double_FC_stalling <- Double_FC_stalling%>%
+  group_by(gene_symbol)%>%
+  mutate(FC_relative_to_gene_mean = RPM_mean / mean(RPM_mean, na.rm = TRUE)) %>%
+  ungroup()%>%
+  rename_with(.fn = ~ paste0("Double_", .), .cols = matches("^(RPM_|FC_|norm_)"))
+
+Triple_FC_stalling <- Triple_FC_stalling%>%
+  group_by(gene_symbol)%>%
+  mutate(FC_relative_to_gene_mean = RPM_mean / mean(RPM_mean, na.rm = TRUE)) %>%
+  ungroup()%>%
+  rename_with(.fn = ~ paste0("Triple_", .), .cols = matches("^(RPM_|FC_|norm_)"))
+Val_FC_stalling <- Val_FC_stalling%>%
+  group_by(gene_symbol)%>%
+  mutate(FC_relative_to_gene_mean = RPM_mean / mean(RPM_mean, na.rm = TRUE)) %>%
+  ungroup()%>%
+  rename_with(.fn = ~ paste0("Val_", .), .cols = matches("^(RPM_|FC_|norm_)"))
+Ile_FC_stalling <- Ile_FC_stalling%>%
+  group_by(gene_symbol)%>%
+  mutate(FC_relative_to_gene_mean = RPM_mean / mean(RPM_mean, na.rm = TRUE)) %>%
+  ungroup()%>%
+  rename_with(.fn = ~ paste0("Ile_", .), .cols = matches("^(RPM_|FC_|norm_)"))
+Leu_FC_stalling <- Leu_FC_stalling%>%
+  group_by(gene_symbol)%>%
+  mutate(FC_relative_to_gene_mean = RPM_mean / mean(RPM_mean, na.rm = TRUE)) %>%
+  ungroup()%>%
+  rename_with(.fn = ~ paste0("Leu_", .), .cols = matches("^(RPM_|FC_|norm_)"))
+
+fc_stalling_dfs <- list(Double_FC_stalling, Triple_FC_stalling, Val_FC_stalling, Ile_FC_stalling, Leu_FC_stalling)
+merged_FC_stalling <- purrr::reduce(fc_stalling_dfs, function(x, y) {
+  full_join(x, y, by = c("gene_symbol", "position", "codons", "ctrl_mean", "ctrl_mean_norm"))
+})
+
+load("../../General_datasets/log2FC_pValue.RData") 
+EdgeR_all <- EdgeR_all%>%
+  select(Gene, starts_with("RPF_"))
+load("../../General_datasets/Proteome_logFC.RData")
+Proteome_logFC <- Proteome_logFC
+
+EdgeR_Proteome <- merge(EdgeR_all, Proteome_logFC, by="Gene")
+ALL_merged <- merge(EdgeR_Proteome, merged_FC_stalling, by.x="Gene", by.y="gene_symbol")
+
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(purrr)
+
+# Define conditions
+conditions <- c("Double", "Ile", "Leu", "Triple", "Val")
+
+# Collect data for all stalling site cutoffs
+plot_data <- lapply(conditions, function(condition) {
+  
+  df <- ALL_merged %>%
+    filter(!is.na(!!sym(paste0("Proteome_", condition, "_logFC"))) &
+           !is.na(!!sym(paste0("Stalling_", condition)))) %>%
+    filter(!!sym(paste0("Stalling_", condition))) %>%
+    group_by(Gene)%>%
+    mutate(Stalling_sites = pmin(n(), 9))%>%  ## Everything over 10 is grouped
+    ungroup()
+
+  max_stalls <- max(df$Stalling_sites, na.rm = TRUE)
+
+  site_counts <- df %>%
+     distinct(Gene, .keep_all = TRUE)%>%
+    group_by(Stalling_sites)%>%
+    summarize(n=n()) %>%
+    complete(Stalling_sites = 1:max_stalls, fill = list(n = 0))
+
+  thresholds <- 1:max_stalls
+
+  stats <- map_dfr(thresholds, function(thresh) {
+    
+    stalling_genes <- df %>% filter(Stalling_sites >= thresh) %>% pull(Gene) %>% unique()
+    
+    N <- ALL_merged %>%
+      filter(!is.na(!!sym(paste0("Proteome_", condition, "_logFC"))) &
+             !is.na(!!sym(paste0("Stalling_", condition)))) %>%
+      pull(Gene) %>% 
+      unique() %>% 
+      length()
+
+    K <- length(stalling_genes)
+
+    M_genes <- ALL_merged %>%
+      filter(!is.na(!!sym(paste0("Proteome_", condition, "_logFC"))) &
+             get(paste0("Proteome_", condition, "_PValue")) < 0.01 &
+             get(paste0("Proteome_", condition, "_logFC")) < -0.26) %>%
+      pull(Gene) %>% 
+      unique()
+
+    M <- length(M_genes)
+
+    q <- length(intersect(stalling_genes, M_genes)) - 1
+
+    data.frame(
+      Condition = condition,
+      Threshold = thresh,
+      Num_transcripts = sum(site_counts$n[site_counts$Stalling_sites >= thresh]),
+      P_value = phyper(q, M, N - M, K, lower.tail = FALSE)
+    )
+  })
+
+  stats
+})
+
+plot_df <- bind_rows(plot_data)
+
+plot_df_0 <- lapply(conditions, function(condition) {
+  
+  total_genes <- ALL_merged %>%
+    filter(!is.na(!!sym(paste0("Proteome_", condition, "_logFC"))) &
+           !is.na(!!sym(paste0("Stalling_", condition)))) %>%
+    pull(Gene) %>%
+    unique() %>%
+    length()
+  
+  data.frame(
+    Condition = condition,
+    Threshold = 0,
+    Num_transcripts = total_genes,
+    P_value = NA  # No enrichment test for threshold 0
+  )
+})
+
+# Combine with existing plot_df
+plot_df <- bind_rows(plot_df, do.call(rbind, plot_df_0))
+
+
+plot_data2 <- lapply(conditions, function(condition) {
+  
+  df <- ALL_merged %>%
+    filter(!is.na(!!sym(paste0("Proteome_", condition, "_logFC"))) &
+           !is.na(!!sym(paste0("Stalling_", condition)))) %>%
+    filter(!!sym(paste0("Stalling_", condition))) %>%
+    group_by(Gene) %>%
+    mutate(Stalling_sites = pmin(n(), 4)) %>%
+    ungroup()
+
+  max_stalls <- max(df$Stalling_sites, na.rm = TRUE)
+  thresholds <- 0:max_stalls  # include 0!
+
+  downregulated_genes <- ALL_merged %>%
+    filter(!is.na(!!sym(paste0("Proteome_", condition, "_logFC"))) &
+           !!sym(paste0("Proteome_", condition, "_PValue")) < 0.01 &
+           !!sym(paste0("Proteome_", condition, "_logFC")) < -0.26) %>%
+    pull(Gene) %>%
+    unique()
+
+  df_stalling <- df %>% distinct(Gene, .keep_all = TRUE)
+
+  stats <- map_dfr(thresholds, function(thresh) {
+    
+    if (thresh == 0) {
+      overlap_genes <- downregulated_genes
+    } else {
+      stalling_genes <- df_stalling %>%
+        filter(Stalling_sites >= thresh) %>%
+        pull(Gene) %>%
+        unique()
+      overlap_genes <- intersect(stalling_genes, downregulated_genes)
+    }
+
+    data.frame(
+      Condition = condition,
+      Threshold = thresh,
+      Downregulated_with_stalling = length(overlap_genes)
+    )
+  })
+
+  stats
+})
+
+plot_df2 <- bind_rows(plot_data2)
+```
+
+## Graphs
+```{r}
+plot_df_A <- plot_df %>%
+  select(Condition, Threshold, Num_transcripts)
+
+plot_df_A$Threshold <- as.factor(plot_df_A$Threshold)
+levels(plot_df_A$Threshold)[levels(plot_df_A$Threshold) == "9"] <- "9+"
+
+plot_df_B <- plot_df2 %>%
+  left_join(plot_df %>% select(Condition, Threshold, P_value), by = c("Condition", "Threshold"))
+
+plot_df_B$Threshold <- as.factor(plot_df_B$Threshold)
+levels(plot_df_B$Threshold)[levels(plot_df_B$Threshold) == "4"] <- "4+"
+
+plot_df_B <- plot_df_B %>%
+  mutate(Fill_color = ifelse(Threshold == "0", "gray70", "#964B00"))
+
+scale_factor <- 200 / max(-log10(plot_df_B$P_value), na.rm = TRUE)
+
+
+custom_theme <- theme_minimal(base_family = "Arial", base_size = 12) +
+  theme(
+    text = element_text(color = "black", size = 12),
+    axis.text = element_text(color = "black", size = 12),
+    axis.title = element_text(color = "black", size = 12),
+    axis.ticks = element_line(color = "black"),
+    axis.line = element_line(color = "black"),
+    strip.text = element_text(color = "black", size = 12),
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),
+    panel.grid = element_blank()         
+  )
+
+
+desired_order <- c("Leu", "Ile", "Val", "Double", "Triple")
+new_labels <- c("−Leu", "−Ile", "−Val", "Double", "Triple")
+
+plot_df_A$Condition <- factor(plot_df_A$Condition, levels = desired_order, labels = new_labels)
+plot_df_B$Condition <- factor(plot_df_B$Condition, levels = desired_order, labels = new_labels)
+
+
+plot_A <- ggplot(plot_df_A, aes(x = Threshold, y = Num_transcripts)) +
+  geom_bar(stat = "identity", fill = "#964B00", alpha = 0.6) +
+  facet_wrap(~ Condition, scales = "free_y", ncol = 5) +
+  scale_y_continuous(limits = c(0, 4000)) +
+  labs(
+    x = "Minimum number of stalling sites per transcript",
+    y = "Number of transcripts",
+    title = "Transcripts with stalling sites"
+  , size = 12) +
+  custom_theme
+
+plot_B <- ggplot(plot_df_B, aes(x = Threshold)) +
+  geom_bar(aes(y = Downregulated_with_stalling, fill = Fill_color), stat = "identity", alpha = 0.6) +
+  geom_line(aes(y = -log10(P_value) * scale_factor, group = 1), color = "darkred", size = 1) +
+  geom_hline(yintercept = -log10(0.05) * scale_factor, linetype = "dashed", color = "gray50") +
+  facet_wrap(~ Condition, scales = "free_y", ncol = 5) +
+  scale_y_continuous(
+    limits = c(0, 200),
+    name = "Number of proteins",
+    sec.axis = sec_axis(~ . / scale_factor, name = "-log10(P-value)")
+  ) +
+  scale_fill_identity() +
+  labs(
+    x = "Minimum number of stalling sites per transcript",
+    title = "Downregulated proteins with stalling sites"
+  , size = 12) +
+  custom_theme
+
+
+plot_A
+plot_B
+
+combined_plot <- plot_A / plot_B + 
+  plot_layout(ncol = 1, heights = c(1, 1)) 
+combined_plot
+
+ggsave("../Figures/Downregulated proteins in function to stalling sites.png", combined_plot, width = 10, height = 5)
+```
+

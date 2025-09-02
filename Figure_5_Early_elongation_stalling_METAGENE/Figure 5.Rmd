@@ -1,0 +1,107 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-08-13"
+---
+
+```{r}
+load("./Figures/Boxplot_metagene.RData")
+load("./Figures/dotplot_Polarity_20.RData")
+load("./Figures/METAGENE_CtrlvsDOUBLE.RData")
+meta_Double <- plots$DOUBLE
+meta_Triple <- plots$TRIPLE
+meta_Val <- plots$VAL
+meta_Leu <- plots$LEU
+meta_Ile <- plots$ILE
+
+load("./Figures/upset_plot_Polarity.RData")
+load("./Figures/Polarity_distribution.RData")
+load("../GENE PROFILES/Cbx1_plot.RData")
+cbx1 <-g2
+load("../GENE PROFILES/Hint1_plot.RData")
+Hint1 <- g2
+
+```
+
+```{r}
+library(patchwork)
+T1 <- theme(
+  text = element_text(size = 14, family = "Arial", color = "black"),
+  axis.text.x = element_text(hjust = 1, vjust = 0.5, size = 14, family = "Arial", color = "black"),
+  axis.text.y = element_text(size = 14, family = "Arial", color = "black"),
+  axis.title = element_text(size = 14, family = "Arial", color = "black"),
+  plot.title = element_text(size = 14, family = "Arial", color = "black", hjust = 0.5)
+)
+
+T2 <- theme(
+  text = element_text(size = 14, family = "Arial", color = "black"),
+  axis.text.x = element_text(angle= 90, hjust = 1, vjust = 0.5, size = 14, family = "Arial", color = "black"),
+  axis.text.y = element_text(size = 14, family = "Arial", color = "black"),
+  axis.title = element_text(size = 14, family = "Arial", color = "black"),
+  plot.title = element_text(size = 14, family = "Arial", color = "black", hjust = 0.5)
+)
+
+
+design <- "
+  AABBCC
+  DDEEFF
+  GG##HH
+  GG##HH
+  IIIJJJ
+  IIIJJJ
+  IIIJJJ
+"
+figure_5 <- 
+  meta_Leu+ T1+ ggtitle("-Leu")+
+  meta_Ile+ T1+ ggtitle("-Ile")+
+  meta_Val+T1+ ggtitle("-Val")+
+  meta_Double+T1+ ggtitle("Double")+
+  meta_Triple+T1+ ggtitle("Triple")+
+  Boxplot_metagene+T2+ ggtitle("")+
+  Polarity+T1+ ggtitle("Polarity scores")+
+  dotplot_Polarity_20+T2+ ggtitle("")+
+  cbx1+T1+ ggtitle("Cbx1")+
+  Hint1+T1+ ggtitle("Hint1")+
+  plot_layout(design = design)
+
+ggsave(filename = "./Figure_5.svg", plot = figure_5, width = 14, height = 16, units = "in", dpi = 300)
+ggsave(filename = "./Figure_5.png", plot = figure_5, width = 14, height = 16, units = "in", dpi = 300)
+```
+
+
+### SUPPLEMENTAL
+```{r}
+library(patchwork)
+
+load("./Figures/dotplot_Polarity_wholeCDS.RData")
+load("./Figures/heatmap_plot_polarity.RData")
+
+T1 <- theme(
+  text = element_text(size = 14, family = "Arial", color = "black"),
+  axis.text.x = element_text(hjust = 1, vjust = 0.5, size = 14, family = "Arial", color = "black"),
+  axis.text.y = element_text(size = 14, family = "Arial", color = "black"),
+  axis.title = element_text(size = 14, family = "Arial", color = "black"),
+  plot.title = element_text(size = 14, family = "Arial", color = "black", hjust = 0.5)
+)
+
+T2 <- theme(
+  text = element_text(size = 14, family = "Arial", color = "black"),
+  axis.text.x = element_text(angle= 90, hjust = 1, vjust = 0.5, size = 14, family = "Arial", color = "black"),
+  axis.text.y = element_text(size = 14, family = "Arial", color = "black"),
+  axis.title = element_text(size = 14, family = "Arial", color = "black"),
+  plot.title = element_text(size = 14, family = "Arial", color = "black", hjust = 0.5)
+)
+
+
+design <- "
+AB
+"
+figure_5SUPP <- 
+  polarity_heat+ T1+ ggtitle("-Leu")+
+  dotplot_Polarity_wholeCDS+ T1+ ggtitle("-Ile")+
+  plot_layout(design = design)
+
+ggsave(filename = "./Figure_5SUPP.svg", plot = figure_5SUPP, width = 14, height = 16, units = "in", dpi = 300)
+ggsave(filename = "./Figure_5SUPP.png", plot = figure_5SUPP, width = 14, height = 16, units = "in", dpi = 300)
+```
+

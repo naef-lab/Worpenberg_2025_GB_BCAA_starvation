@@ -1,0 +1,143 @@
+
+## Distribution of codons along the CDS
+```{r}
+filtered_data <- data %>%
+  filter(condition == "CTRL", replicate == "1")%>%
+  mutate(length = as.numeric(length)) %>%
+  filter(length >= 300)%>%
+  group_by(gene_symbol) %>%
+  filter((position >= 1 & position <= 150)|(position >= (length - 149) & position <= length)) %>%
+  ungroup()%>%
+  mutate(partial_position = if_else(position <= 150, position, 300-(length-position)))
+```
+
+
+```{r}
+codon_distribution <- filtered_data %>%
+  group_by(codons, partial_position) %>%
+  summarize(count = n(), .groups = 'drop')%>%
+  filter(str_length(codons)==3)
+
+codon_table <- data.frame(
+  codon = c("TTT", "TTC", "TTA", "TTG", "CTT", "CTC", "CTA", "CTG",
+            "ATT", "ATC", "ATA", "ATG", "GTT", "GTC", "GTA", "GTG",
+            "TCT", "TCC", "TCA", "TCG", "AGT", "AGC",
+            "CCT", "CCC", "CCA", "CCG",
+            "ACT", "ACC", "ACA", "ACG",
+            "GCT", "GCC", "GCA", "GCG",
+            "TAT", "TAC", "CAT", "CAC", "CAA", "CAG", "AAT", "AAC",
+            "AAA", "AAG", "GAT", "GAC", "GAA", "GAG",
+            "TGT", "TGC", "TGG",
+            "CGT", "CGC", "CGA", "CGG", "AGA", "AGG",
+            "GGT", "GGC", "GGA", "GGG",
+            "TAA", "TAG", "TGA"),
+  amino_acid = c("Phe", "Phe", "Leu", "Leu", "Leu", "Leu", "Leu", "Leu",
+                 "Ile", "Ile", "Ile", "Met", "Val", "Val", "Val", "Val",
+                 "Ser", "Ser", "Ser", "Ser", "Ser", "Ser",
+                 "Pro", "Pro", "Pro", "Pro",
+                 "Thr", "Thr", "Thr", "Thr",
+                 "Ala", "Ala", "Ala", "Ala",
+                 "Tyr", "Tyr", "His", "His", "Gln", "Gln", "Asn", "Asn",
+                 "Lys", "Lys", "Asp", "Asp", "Glu", "Glu",
+                 "Cys", "Cys", "Trp",
+                 "Arg", "Arg", "Arg", "Arg", "Arg", "Arg",
+                 "Gly", "Gly", "Gly", "Gly",
+                 "STOP", "STOP", "STOP")
+)
+
+codon_distribution <- codon_distribution %>%
+  left_join(codon_table, by = c("codons" = "codon"))%>%
+  mutate(codons = str_replace_all(codons, "T", "U"))%>%
+  mutate(codon_aa = paste0(amino_acid, ":", codons))%>%
+  mutate(region = if_else(partial_position <= 150, "First 150", "Last 150"))%>%
+  filter(!is.na(amino_acid))%>%
+  filter(!partial_position %in% c(1:15, 300))%>%
+  filter(!amino_acid %in% c("STOP"))%>%
+  filter(amino_acid %in% c("Ile"))
+
+#  mutate(amino_acid = factor(amino_acid, levels = sort(unique(amino_acid))))
+
+meta_codons <- ggplot(codon_distribution, aes(x = partial_position, y = count, color = region, group = region)) +
+  geom_smooth(aes(fill = region), alpha = 0.5) +
+  geom_vline(xintercept = 150, linetype = "dashed", color = "black") +
+  scale_color_manual(values = c("First 150" = "blue", "Last 150" = "red")) +
+  scale_fill_manual(values = c("First 150" = "lightblue", "Last 150" = "pink")) +
+  facet_wrap(~ codon_aa,ncol = 6, scales = "free_y") +
+  theme_classic(base_family = "Arial") +
+  labs(title = "Codon Frequency along CDS (First and last removed)",
+    x = "Position in CDS [nt]",
+    y = "Codon Occurrence Count") +
+  scale_x_continuous(breaks = c(0,150, 300),
+                     labels = c("Start","+/-150","Stop")) +
+  scale_y_continuous(limits = c(0, NA)) +
+  theme(text = element_text(color = "black"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 8, color = "black"),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    panel.border = element_rect(color = "black", fill = NA, size = 1),
+    panel.grid.major = element_line(color = "grey80", linetype = "dashed"),
+    panel.grid.minor = element_blank()
+  )
+
+meta_codons
+
+
+ggsave("../Figures/Revision/Codons_distribution_Ile.png", meta_codons, width = 7, height = 2.5)
+#save(meta_codons, file = "../Figures/Codons_METAGENE.RData")
+```
+
+## Distance of first Val codon to Leu codon
+```{r}
+val_codons <- c("GUU", "GUC", "GUA", "GUG")
+ile_codons <- c("AUU", "AUC", "AUA")
+leu_codons <- c("UUA", "UUG", "CUU", "CUC", "CUA", "CUG")
+
+ctrl_data <- data %>%
+  filter(condition == "CTRL", replicate == "1") %>%
+  mutate(codons = str_replace_all(codons, "T", "U")) %>%
+  select(codons, position, gene_symbol, length)
+
+compute_polarity_score <- function(group1_codons, group2_codons, name1 = "Group1", name2 = "Group2") {
+  ctrl_data %>%
+    filter(codons %in% c(group1_codons, group2_codons)) %>%
+    group_by(gene_symbol) %>%
+    summarise(
+      pos1 = if (any(codons %in% group1_codons)) min(position[codons %in% group1_codons]) else NA,
+      pos2 = if (any(codons %in% group2_codons)) min(position[codons %in% group2_codons]) else NA,
+      cds_length = unique(length),
+      polarity_score = (pos1 - pos2) ,  #/ cds_length
+      .groups = "drop"
+    ) %>%
+    mutate(comparison = paste(name1, "vs", name2))
+}
+val_vs_leu <- compute_polarity_score(val_codons, leu_codons, "Val", "Leu")
+ile_vs_leu <- compute_polarity_score(ile_codons, leu_codons, "Ile", "Leu")
+val_vs_ile <- compute_polarity_score(val_codons, ile_codons, "Val", "Ile")
+
+ile_auu_vs_auc <- compute_polarity_score(c("AUA"), c("AUC", "AUU"), "AUA", "AUC & AUU")
+
+all_scores <- bind_rows(val_vs_leu, ile_vs_leu, val_vs_ile, ile_auu_vs_auc)%>%
+  mutate(comparison=factor(comparison, levels = c("Val vs Ile","Val vs Leu", "Ile vs Leu", "AUA vs AUC & AUU")))
+
+Position_Comparisons <- ggplot(all_scores, aes(x = polarity_score)) +
+  geom_histogram(binwidth = 10, fill = "darkgray", color = "black", alpha = 0.2) +
+  facet_wrap(~ comparison, scales = "free", ncol=1) +
+  theme_minimal(base_family = "Arial") +
+  theme(
+    text = element_text(size = 12, color = "black"),
+    axis.text = element_text(size = 12, color = "black"),
+    axis.title = element_text(size = 12, color = "black"),
+    plot.title = element_text(size = 12, hjust = 0.5),
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank()
+  ) +
+  labs(
+    title = "Distribution of Polarity Scores by Codon Comparison",
+    x = "Relative Position Difference (First Codon A - B)",
+    y = "Count"
+  ) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red", size = 1)
+
+
+ggsave("../Figures/Revision/Position_Comparison.png", Position_Comparisons, width = 4, height = 9)
+```

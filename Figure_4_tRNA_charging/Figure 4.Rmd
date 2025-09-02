@@ -1,0 +1,105 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-08-13"
+---
+
+```{r}
+
+
+load("./Figures/dotplot_Double.RData")
+load("./Figures/dotplot_Ile.RData")
+load("./Figures/dotplot_Leu.RData")
+load("./Figures/dotplot_Triple.RData")
+load("./Figures/dotplot_Val.RData")
+
+
+
+```
+
+```{r}
+library(patchwork)
+
+design <- "
+ #AB
+ CDE
+"
+
+figure_4 <- 
+  (dotplot_Leu + ggtitle("tRNA charging: -Leu")+
+     dotplot_Ile +ggtitle("tRNA charging: -Ile")+
+     dotplot_Val +ggtitle("tRNA charging: -Val")+
+     dotplot_Double +ggtitle("tRNA charging: Double")+
+     dotplot_Triple) +ggtitle("tRNA charging: Triple")+
+  plot_layout(design = design, guides = "collect") &
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 14, family = "Arial", color = "black"), 
+    legend.text = element_text(size = 14, family = "Arial", color = "black"),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+# Add a shared x-axis title to the final stacked plot
+figure_4 <- figure_4 + 
+  plot_annotation(
+    title = "",
+    caption = "",
+    theme = theme(
+      plot.title = element_text(size = 14, family = "Arial", color = "black", hjust = 0.5),
+      axis.title.x = element_text(size = 14, family = "Arial", color = "black"),
+      axis.title.y = element_text(size = 14, family = "Arial", color = "black")
+    )
+  )
+
+ggsave(filename = "./Figure_4.svg", plot = figure_4, width = 12, height = 8, units = "in", dpi = 300)
+ggsave(filename = "./Figure_4.png", plot = figure_4, width = 12, height = 8, units = "in", dpi = 300)
+```
+
+### Supplemental
+```{r}
+load("./Figures/TOTAL_dotplot_Double.RData")
+
+load("./Figures/TOTAL_dotplot_Ile.RData")
+
+load("./Figures/TOTAL_dotplot_Leu.RData")
+
+load("./Figures/TOTAL_dotplot_Triple.RData")
+
+load("./Figures/TOTAL_dotplot_Val.RData")
+
+
+
+figure_4.2 <- 
+  (dotplot_Leu + ggtitle("tRNA charging: -Leu")+
+     dotplot_Ile +ggtitle("tRNA charging: -Ile")+
+     dotplot_Val +ggtitle("tRNA charging: -Val")+
+     dotplot_Double +ggtitle("tRNA charging: Double")+
+     dotplot_Triple) +ggtitle("tRNA charging: Triple")+
+  plot_layout(design = design, guides = "collect") &
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 14, family = "Arial", color = "black"), 
+    legend.text = element_text(size = 14, family = "Arial", color = "black"),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+# Add a shared x-axis title to the final stacked plot
+figure_4.2 <- figure_4.2 + 
+  plot_annotation(
+    title = "",
+    caption = "",
+    theme = theme(
+      plot.title = element_text(size = 14, family = "Arial", color = "black", hjust = 0.5),
+      axis.title.x = element_text(size = 14, family = "Arial", color = "black"),
+      axis.title.y = element_text(size = 14, family = "Arial", color = "black")
+    )
+  )
+
+ggsave(filename = "./Figure_4.2.svg", plot = figure_4.2, width = 12, height = 8, units = "in", dpi = 300)
+ggsave(filename = "./Figure_4.2.png", plot = figure_4.2, width = 12, height = 8, units = "in", dpi = 300)
+```
+

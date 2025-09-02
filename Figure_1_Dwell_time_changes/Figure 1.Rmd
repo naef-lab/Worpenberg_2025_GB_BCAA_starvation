@@ -1,0 +1,115 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-08-13"
+---
+
+```{r}
+# Scatter plot for dwell time changes & Ribosome density distribution
+load("./Figures/Density_distributions_combined.RData")
+load("./Figures/All_graphs_ribosome_enrichments_around_codons.RData")
+load("./Figures/Dwell_times_scatter_plots.RData")
+
+# Codon usage vs dwell time
+load("./Figures/scatter_DT_Codon_frequencies.RData")
+load("./Figures/Heatmap_AA_level.RData")
+
+## SUPPLEMENT: Correlation to liver, Heatmaps of dwell times, barplot codon frequencies
+load("./Figures/A_AL_NOCHX.RData")
+load("./Figures/All_Heatmaps_Norm.RData")
+load("./Figures/barplot_codon_frequencies.RData")
+```
+
+```{r}
+library(patchwork)
+
+design <- "
+  ABCDE
+  FFFGG
+  FFFHH
+"
+library(ggplot2)
+library(patchwork)
+
+# Define the global theme
+global_theme <- theme(
+  text = element_text(family = "Arial", size = 14, color = "black"),
+  axis.text.x = element_text(size = 14, color = "black", angle = 0, hjust = 0.5),
+  axis.text.y = element_text(size = 14, color = "black"),
+  axis.title = element_text(size = 14, color = "black"),
+  plot.title = element_text(size = 14, hjust = 0.5, face = "bold"), # Center titles
+  legend.position = "top"
+)
+# Custom theme for scatter DT codon frequency (includes larger annotation text)
+scatter_codons_theme <- theme(
+  text = element_text(family = "Arial", size = 14, color = "black"),
+  axis.text.x = element_text(size = 14, color = "black", angle = 0, hjust = 0.5),
+  axis.text.y = element_text(size = 14, color = "black"),
+  axis.title = element_text(size = 14, color = "black"),
+  plot.title = element_text(size = 14, hjust = 0.5, face = "bold"),
+  legend.position = "right",
+  plot.caption = element_text(size = 16, face = "bold", family = "Arial") # Bigger text annotation
+)
+# Custom theme for heatmap (legend on right)
+heatmap_theme <- theme(
+  text = element_text(family = "Arial", size = 14, color = "black"),
+  axis.text.x = element_text(size = 14, color = "black", angle = 0, hjust = 0.5),
+  axis.text.y = element_text(size = 14, color = "black"),
+  axis.title = element_text(size = 14, color = "black"),
+  plot.title = element_text(size = 14, hjust = 0.5, face = "bold"),
+  legend.position = "right"
+)
+
+##Example:
+plot_1A <- plot_1A + global_theme
+
+# Apply themes to individual plots
+figure_1 <- 
+  (DT_scatter_Leu + global_theme) + 
+  (DT_scatter_Ile + global_theme) + 
+  (DT_scatter_Val + global_theme) + 
+  (DT_scatter_Double + global_theme) +
+  (DT_scatter_Triple + global_theme) +
+  (Density_distributions_combined + global_theme) +
+  (heat_AA_levels + heatmap_theme + ggtitle("Intracellular AA level")) +
+  (scatter_DT_Codon_frequencies + scatter_codons_theme) +
+  plot_layout(design = design) +
+  theme(legend.position = "top") # Ensure overall consistency
+
+
+
+ggsave(filename = "./Figure_1.svg", plot = figure_1, width = 16, height = 14, units = "in", dpi = 300)
+ggsave(filename = "./Figure_1.png", plot = figure_1, width = 16, height = 14, units = "in", dpi = 300)
+```
+### SUPPLEMENTAL
+
+```{r}
+
+T1 <- theme(legend.position = "top")
+T2 <- theme(legend.position = "none")
+
+
+
+design <- "
+  #AAAAAAAAAAAAA#
+  BBBBBCCCCCDDDDD
+  EEEFFFGGGHHHIII
+  EEEFFFGGGHHHIII
+"
+figure_1SUPP1 <-
+  barplot_codon_frequencies+
+  A_AL_NOCHX_plot+ ggtitle("DTs: A-site") + labs(y = "DTs (NIH3T3 cells; log2)", x="DTs (liver; log2)") +
+  P_AL_NOCHX_plot+ ggtitle("DTs: P-site") + labs(y = "DTs (NIH3T3 cells; log2)", x="DTs (liver; log2)") +
+  E_AL_NOCHX_plot+ ggtitle("DTs: E-site") + labs(y = "DTs (NIH3T3 cells; log2)", x="DTs (liver; log2)") +
+  heat_LEU+ ggtitle("DTs: -Leu") + labs(y = "Position") + T2+
+  heat_ILE+ggtitle("DTs: -Ile") + T2+
+  heat_VAL+ggtitle("DTs: -Val") + T1+
+  heat_DOUBLE+ggtitle("DTs: Double") +T2+
+  heat_TRIPLE+ggtitle("DTs: Triple") +T2+
+  plot_layout(design = design)
+
+ggsave(filename = "./Figure_1_SUP1.1.png", plot = figure_1SUPP1, width = 14, height = 14, units = "in", dpi = 300)
+ggsave(filename = "./Figure_1_SUP1.1.svg", plot = figure_1SUPP1, width = 14, height = 14, units = "in", dpi = 300)
+```
+
+

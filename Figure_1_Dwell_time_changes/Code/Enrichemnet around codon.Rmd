@@ -1,0 +1,164 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-06-25"
+---
+
+```{r}
+load(file="../../General_datasets/datatable_Riboseq_normalized.RData")
+
+
+library(dplyr)
+library(ggplot2)
+library(extrafont)
+codon_sets <- list(
+  ile_codons = c("ATA", "ATC", "ATT"),
+  val_codons = c("GTA", "GTC", "GTG", "GTT"),
+  leu_codons = c("CTA", "CTC", "CTG", "CTT", "TTA", "TTG"))
+
+
+codons_of_interest <- codon_sets$leu_codons
+condition_of_interest <- "LEU"
+
+codon_name <- names(codon_sets)[sapply(codon_sets, identical, codons_of_interest)]
+plot_name <- paste0("densities_",tolower(condition_of_interest), "_", tolower(codon_name))
+
+# Calculate the baseline Norm_RPM for the CTRL condition
+ctrl_data <- data %>%
+  filter(codons %in% codons_of_interest, condition == "CTRL") %>%
+  dplyr::select(gene_symbol, position, Sample, codons) %>%
+  distinct() %>%
+  rowwise() %>%
+  do({
+    data.frame(position = .[["position"]] + (-100:100), 
+               gene_symbol = .[["gene_symbol"]], 
+               Sample = .[["Sample"]],
+               codon_0 = rep(.$codons, 201),
+               relative_position = (-100:100))
+  }) %>%
+  left_join(data, by = c("position", "gene_symbol", "Sample")) %>%
+  na.omit() %>%
+  group_by(codon_0, relative_position) %>%
+  summarize(ctrl_mean_Norm_RPM = mean(Norm_RPM, na.rm = TRUE), .groups = 'drop')
+
+# Process the data for the specific condition and calculate relative values
+summary <- data %>%
+  filter(codons %in% codons_of_interest, condition == condition_of_interest) %>%
+  dplyr::select(gene_symbol, position, Sample, codons) %>%
+  distinct() %>%
+  rowwise() %>%
+  do({
+    data.frame(position = .[["position"]] + (-100:100), 
+               gene_symbol = .[["gene_symbol"]], 
+               Sample = .[["Sample"]],
+               codon_0 = rep(.$codons, 201),
+               relative_position = (-100:100))
+  }) %>%
+  left_join(data, by = c("position", "gene_symbol", "Sample")) %>%
+  na.omit() %>%
+  left_join(ctrl_data, by = c("codon_0", "relative_position")) %>%
+  mutate(relative_Norm_RPM = Norm_RPM / ctrl_mean_Norm_RPM) %>%
+  group_by(codon_0, relative_position) %>%
+  summarize(log2FC_RPM = log2(mean(relative_Norm_RPM, na.rm = TRUE)), .groups = 'drop')
+
+plot_object <-  ggplot(summary, aes(x = relative_position, y = log2FC_RPM, color = codon_0)) +
+  geom_line(size = 1.2) +  
+  labs(title = paste0("Starvation: ", condition_of_interest),
+       x = "Distance from codon [nt]",
+       y = "Mean RPM [AA limitation - Ctrl; log2]", color = NULL) +
+  theme_classic(base_size = 14) +  
+  theme(text = element_text(family = "Arial"),
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 16), 
+        axis.text = element_text(color = "black", size = 12),  
+        axis.title = element_text(color = "black", size = 14),  
+        legend.position = "top",  
+        legend.title = element_blank(),  
+        legend.text = element_text(size = 10)) + 
+  ylim(-0.2,1.5)+
+  scale_color_viridis_d(begin = 0.1, end = 0.9)
+
+assign(plot_name, plot_object)
+```
+
+```{r}
+save(densities_leu_leu_codons, densities_triple_leu_codons, densities_triple_ile_codons, densities_double_ile_codons, densities_double_leu_codons, densities_double_val_codons, densities_ile_ile_codons, densities_triple_val_codons, densities_val_val_codons, file = "../Figures/All_graphs_ribosome_enrichments_around_codons.RData")
+```
+
+
+# Combine and adjust graphs with density around specific codons
+```{r}
+load("../Figures/All_graphs_ribosome_enrichments_around_codons.RData")
+```
+
+
+```{r}
+library(patchwork)
+library(ggplot2)
+library(patchwork)
+
+# Base theme
+base_theme <- theme(
+  text = element_text(family = "Arial"),
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  axis.text.x = element_text(size = 14),
+  axis.text.y = element_text(size = 14)
+)
+
+# Axis limits
+x_limits <- c(-100, 100)
+y_limits <- c(-0.2, 2.5)
+
+# Custom colors
+custom_colors <- c(
+  "TTA" = "olivedrab", "TTG" = "limegreen", "CTT" = "mediumseagreen",
+  "CTC" = "greenyellow", "CTA" = "green", "CTG" = "darkolivegreen", 
+  "ATT" = "#339999", "ATC" = "#377EB8", "ATA" = "#0066FF", 
+  "GTT" = "darkorange4", "GTG" = "gold", "GTC" = "chocolate", "GTA" = "#FF7F00"
+)
+
+# Arrange the plots in a 3x3 grid
+Density_distributions_combined <- (
+  wrap_plots(
+    densities_leu_leu_codons + base_theme + xlim(x_limits) + ylim(y_limits) + scale_color_manual(values = custom_colors) +
+  annotate("text", x = 0, y = 2.2, label = "-Leu", size = 5),
+    densities_ile_ile_codons + base_theme + xlim(x_limits) + ylim(y_limits) + scale_color_manual(values = custom_colors)+
+  annotate("text", x = 0, y = 2.2, label = "-Ile", size = 5),
+    densities_val_val_codons + base_theme + xlim(x_limits) + ylim(y_limits) + scale_color_manual(values = custom_colors)+
+  annotate("text", x = 0, y = 2.2, label = "-Val", size = 5),
+    densities_double_leu_codons + base_theme + xlim(x_limits) + ylim(y_limits) + scale_color_manual(values = custom_colors)+
+  annotate("text", x = 0, y = 2.2, label = "Double", size = 5),
+    densities_double_ile_codons + base_theme + xlim(x_limits) + ylim(y_limits) + scale_color_manual(values = custom_colors)+
+  annotate("text", x = 0, y = 2.2, label = "Double", size = 5),
+    densities_double_val_codons + base_theme + xlim(x_limits) + ylim(y_limits) + scale_color_manual(values = custom_colors)+
+  annotate("text", x = 0, y = 2.2, label = "Double", size = 5),
+    densities_triple_leu_codons + base_theme + xlim(x_limits) + ylim(y_limits) + scale_color_manual(values = custom_colors)+
+  annotate("text", x = 0, y = 2.2, label = "Triple", size = 5),
+    densities_triple_ile_codons + base_theme + xlim(x_limits) + ylim(y_limits) + scale_color_manual(values = custom_colors)+
+  annotate("text", x = 0, y = 2.2, label = "Triple", size = 5),
+    densities_triple_val_codons + base_theme + xlim(x_limits) + ylim(y_limits) + scale_color_manual(values = custom_colors)+
+  annotate("text", x = 0, y = 2.2, label = "Triple", size = 5),
+    nrow = 3
+  ) +
+  plot_layout(guides = 'collect', axis_title = "collect") +
+  plot_annotation(
+    title = "Enrichment around Codon Positions",
+    theme = theme(
+      legend.position = 'top',
+      plot.title = element_text(hjust = 0.5, size = 14)
+    )
+  ) &
+  theme(
+    plot.title = element_blank(),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14, angle = 90)
+  )
+)
+
+print(Density_distributions_combined)
+
+ggsave("../Figures/Density_distributions_combined.tiff", plot = Density_distributions_combined, width = 9, height = 9, dpi = 300)
+ggsave("../Figures/Density_distributions_combined.svg", plot = Density_distributions_combined, width = 9, height = 9, dpi = 300)
+save(Density_distributions_combined, file = "../Figures/Density_distributions_combined.RData")
+```
+

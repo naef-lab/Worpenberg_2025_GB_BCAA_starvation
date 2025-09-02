@@ -1,0 +1,81 @@
+---
+title: "Free amino acids"
+output: html_document
+date: "2023-06-26"
+---
+
+
+```{r}
+library(readxl)
+Results <- read_excel("../Data/F. Naef_AA_Results.xlsx", 
+    sheet = "Result")
+Results$Deprivation <- factor(Results$Deprivation, levels = c("Ctrl", "Leu", "Ile", "Val", "Double", "Triple"))
+```
+
+## Heatmap
+```{r}
+library(readxl)
+library(pheatmap)
+library(tidyr)
+library(tibble)
+
+essential_aa <- c("His", "Ile", "Leu", "Lys", "Met", "Phe", "Thr", "Trp", "Val")
+non_essential_aa <- c("Ala", "Asn","Arg", "Asp", "Cys", "Gln", "Glu", "Gly", "Pro", "Ser", "Tyr")
+
+mean_results <- Results %>%
+  group_by(Deprivation, Metabolite, Name) %>%
+  summarize(MeanAmount = mean(Amount, na.rm = TRUE), .groups = 'drop')%>%
+  mutate(Essentiality = case_when(
+    Name %in% essential_aa ~ "Essential",
+    Name %in% non_essential_aa ~ "Non-essential",
+    TRUE ~ "Other"
+  ))
+
+mean_results <- mean_results %>%
+  filter(Essentiality != "Other")
+
+control_amounts <- mean_results %>%
+  filter(Deprivation == "Ctrl") %>%
+  select(Name, CtrlAmount = MeanAmount)
+
+normalized_results <- mean_results %>%
+  inner_join(control_amounts, by = "Name") %>%
+  mutate(log2FC = log2((MeanAmount / CtrlAmount))) %>%
+  select(-MeanAmount, -CtrlAmount)
+
+sorted_results <- normalized_results %>%
+  arrange(Essentiality, Name) %>%
+  filter(!Deprivation=="Ctrl")%>%
+  mutate(Aminoacid = Name)
+
+heat_AA_levels <- ggplot(sorted_results, aes(x = Deprivation, y = Aminoacid, fill = log2FC)) +
+  geom_tile(aes(fill = log2FC), color = "black", width = 1.2) +
+  geom_text(data = subset(sorted_results, log2FC < -10 | log2FC > 10), 
+            aes(label = "<LOD"), 
+            size = 3, color = "white", family = "Arial", fontface = "bold") +
+  scale_fill_gradientn(colors = colorRampPalette(c("darkblue", "white", "darkred"))(100), 
+                       limits = c(-10, 10), 
+                       na.value = "darkblue") +
+  theme_classic() +
+  theme(
+    text = element_text(family = "Arial", size = 14, color = "black"),  # Set text properties
+    axis.text.y = element_text(size = 14, color = "black", margin = margin(t = 0, r = 0, b = 0, l = 0)),
+    axis.text.x = element_text(size = 14, color = "black", angle = 0, margin = margin(t = 0, r = 0, b = 0, l = 0)),  # Rotate x-axis text
+    axis.ticks = element_blank(),  
+    axis.line = element_blank(),  
+    axis.title = element_blank(),  
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 14, color = "black", face = "plain", angle = 90),
+    plot.margin = unit(c(0, 0, 0, 0), "cm"),  
+    legend.position = "right",
+    legend.box.just = "left") +
+    guides(fill = guide_colorbar(title.position = "left", title.hjust = 0.5))
+
+heat_AA_levels
+
+ggsave("../Figures/Heatmap_AA_level.svg", heat_AA_levels, width = 6, height = 6)
+ggsave("../Figures/Heatmap_AA_level.tiff", heat_AA_levels, width = 6, height = 6)
+save(heat_AA_levels, file = "../Figures/Heatmap_AA_level.RData")
+```
+
+

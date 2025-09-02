@@ -1,0 +1,681 @@
+## Filter
+```{r}
+load(file="../../General_datasets/datatable_Riboseq_normalized.RData")
+```
+
+#Metagene: Average of replicates with confidence intervall and overlapping graphs (with CTRL)
+```{r}
+metagene_overlap <- data %>%
+  group_by(condition, normalized_position) %>%
+  summarise(sum_reads = sum(Norm_RPM, na.rm = TRUE),
+    sem = sd(Norm_RPM, na.rm = TRUE) / sqrt(n()),
+    .groups = 'drop')%>%
+  mutate(lower = sum_reads - sem,
+    upper = sum_reads + sem)
+
+conditions <- setdiff(unique(metagene_overlap$condition), "CTRL")
+plots <- list()
+
+for (starvation in conditions) {
+  dat <- metagene_overlap %>%
+    filter(condition %in% c("CTRL", starvation))
+
+  current_plot <- ggplot(dat, aes(x = normalized_position, y = sum_reads, color = condition, fill = condition)) +
+  geom_line(size=2) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.4) +
+  scale_color_manual(values = c("black", "orange")) +
+  scale_fill_manual(values = c("black", "orange")) +
+    labs(
+      title = paste("Ctrl vs", starvation),
+      x = "Normalized Position in CDS (%)",
+      y = "Aggregated norm. RPM"
+    ) +
+    theme_classic(base_family = "Arial") +
+    theme(text = element_text(size = 14, colour = "black"), 
+        axis.text = element_text(size = 14, color = "black"), 
+        axis.title = element_text(size = 14, color = "black"), 
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(size = 0.5, colour = "black"),
+        plot.background = element_rect(fill = "transparent", color = NA), 
+    panel.background = element_rect(fill = "transparent", color = NA),
+    legend.position = "none")+
+    coord_cartesian(ylim = c(100, NA))
+  
+  plots[[starvation]] <- current_plot
+}
+
+for (starvation in names(plots)) {
+  print(plots[[starvation]])
+  ggsave(paste0("../Figures/METAGENE_Ctrlvs", starvation, ".svg"), plot = plots[[starvation]], width = 4, height = 3, dpi = 300)
+  ggsave(paste0("../Figures/METAGENE_Ctrlvs", starvation, ".tiff"), plot = plots[[starvation]], width = 4, height = 3, dpi = 300)
+ 
+  save(plots, file = paste0("../Figures/METAGENE_Ctrlvs", starvation, ".RData"))
+}
+```
+### Boxplot for quantification of ramp
+```{r}
+data_summary <- data %>%
+  group_by(gene_symbol, condition, replicate) %>%
+  summarise(
+    Score_start = sum(Norm_RPM[normalized_position >= 0 & normalized_position <= 20], na.rm = TRUE),
+    Score_end = sum(Norm_RPM[normalized_position >= 80 & normalized_position <= 100], na.rm = TRUE),
+    Score_mid = sum(Norm_RPM[normalized_position >= 40 & normalized_position <= 60], na.rm = TRUE)
+  )
+
+ctrl_means <- data_summary %>%
+  filter(condition == "CTRL") %>%
+  group_by(gene_symbol) %>%
+  summarise(
+    Ctrl_Score_start = mean(Score_start, na.rm = TRUE),
+    Ctrl_Score_end = mean(Score_end, na.rm = TRUE),
+    Ctrl_Score_mid = mean(Score_mid, na.rm = TRUE)
+  )
+
+data_summary <- data_summary %>%
+  left_join(ctrl_means, by = "gene_symbol")%>%
+  mutate(
+    norm_Score_start = Score_start / Ctrl_Score_start,
+    norm_Score_end = Score_end / Ctrl_Score_end,
+    norm_Score_mid = Score_mid / Ctrl_Score_mid)%>%
+  group_by(gene_symbol, condition) %>%
+  summarise(
+    mean_Score_start = mean(norm_Score_start, na.rm = TRUE),
+    mean_Score_end = mean(norm_Score_end, na.rm = TRUE),
+    mean_Score_mid = mean(norm_Score_mid, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+data_summary <- data_summary %>%
+  mutate(across(everything(), ~ ifelse(is.infinite(.), NA, .)))
+data_summary <- data_summary %>%
+  na.omit()
+
+library(forcats)
+data_summary <- data_summary %>%
+  mutate(
+    condition = factor(condition, levels = c("CTRL", "LEU", "ILE", "VAL", "DOUBLE", "TRIPLE")),
+    condition = fct_recode(condition,
+                           "Ctrl" = "CTRL",
+                           "Leu" = "LEU",
+                           "Ile" = "ILE",
+                           "Val" = "VAL",
+                           "Double" = "DOUBLE",
+                           "Triple" = "TRIPLE")
+  )
+data_long <- data_summary %>%
+  pivot_longer(cols = c(mean_Score_start, mean_Score_mid, mean_Score_end), 
+               names_to = "Score_Type", 
+               values_to = "Score") %>%
+  mutate(Score_Type = factor(Score_Type, levels = c("mean_Score_start", "mean_Score_mid", "mean_Score_end"),
+                             labels = c("5' score [1-20]", "Mid [40-60]", "3' score [80-100]")))
+
+
+custom_theme <- theme_classic() +
+  theme(
+    axis.text = element_text(color = "black", family = "Arial"),
+    axis.title = element_text(color = "black", family = "Arial"),
+    axis.ticks = element_line(color = "black"),
+    panel.border = element_rect(color = "black", fill = NA),
+    text = element_text(family = "Arial"),
+    axis.line = element_line(color = "black"),
+    legend.position = "none"
+  )
+
+Boxplot_metagene <- ggplot(data_long, aes(x = condition, y = log2(Score))) +
+  geom_boxplot(outlier.shape = NA, fill = "grey", color = "black") +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "red") +
+  custom_theme +
+  coord_cartesian(ylim = c(-0.8, 2.2)) +  
+  labs(y = "Score ratio to Ctrl [log2]", x = "Condition") +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, family = "Arial", size = 14, color = "black"),
+    axis.text.y = element_text(family = "Arial", size = 14, color = "black"),
+    axis.title.x = element_text(family = "Arial", size = 14, color = "black"),
+    axis.title.y = element_text(family = "Arial", size = 14, color = "black"),
+    strip.text = element_text(family = "Arial", size = 14, color = "black"),
+    legend.text = element_text(family = "Arial", size = 14, color = "black"),
+    legend.title = element_text(family = "Arial", size = 14, color = "black")
+  ) +
+  geom_signif(data = data_long[data_long$Score_Type == "5' score [1-20]", ],
+              comparisons = list(c("Ctrl", "Leu"), c("Ctrl", "Ile"), c("Ctrl", "Val"), c("Ctrl", "Double"), c("Ctrl", "Triple")),
+              map_signif_level = TRUE, y_position = c(0.7, 0.9, 1.1, 1.3, 1.5), tip_length = 0.001) +
+  geom_signif(data = data_long[data_long$Score_Type == "Mid [40-60]", ],
+              comparisons = list(c("Ctrl", "Leu"), c("Ctrl", "Ile"), c("Ctrl", "Val"), c("Ctrl", "Double"), c("Ctrl", "Triple")),
+              map_signif_level = TRUE, y_position = c(0.7, 0.9, 1.1, 1.3, 1.5), tip_length = 0.001) +
+  geom_signif(data = data_long[data_long$Score_Type == "3' score [80-100]", ],
+              comparisons = list(c("Ctrl", "Leu"), c("Ctrl", "Ile"), c("Ctrl", "Val"), c("Ctrl", "Double"), c("Ctrl", "Triple")),
+              map_signif_level = TRUE, y_position = c(0.7, 0.9, 1.1, 1.3, 1.5), tip_length = 0.001) +
+  facet_wrap(~Score_Type)
+
+save(Boxplot_metagene, file="../Figures/Boxplot_metagene.RData")
+ggsave("../Figures/Boxplot_metagene2.svg", Boxplot_metagene,  width = 7, height = 4, dpi = 300 )
+ggsave("../Figures/Boxplot_metagene2.tiff", Boxplot_metagene,  width = 7, height = 4, dpi = 300 )
+
+```
+
+
+
+
+## POLARITY SCORES!!!!
+```{r}
+library(dplyr)
+library(broom)
+library(purrr)
+
+# Calculate the weight (wi) for each position
+data <- data %>%
+  mutate(wi = (2 * position - (length + 1)) / (length - 1))%>%
+  mutate(pi = (RPM * wi) / total_RPM)
+
+polarity_scores <- data %>%
+  group_by(gene_symbol, condition, replicate) %>%
+  summarize(total_pi=sum(pi, na.rm = TRUE))%>%
+  ungroup()%>%
+  group_by(gene_symbol, condition) %>%
+  mutate(mean_total_pi = mean(total_pi, na.rm = TRUE))
+
+t_test_results <- pairwise.t.test(polarity_scores$total_pi,interaction(polarity_scores$condition), p.adjust.method = "bonferroni")
+p_values_global <- t_test_results$p.value
+
+calculate_p_values <- function(data) {
+  ctrl_data <- data %>% filter(condition == "CTRL") %>% pull(total_pi)
+  
+  data %>%
+    group_by(condition) %>%
+    reframe(
+      mean_total_pi = mean(mean_total_pi),
+      p_value = ifelse(condition == "CTRL", NA, 
+                       t.test(total_pi, ctrl_data)$p.value)
+    )
+}
+
+results <- polarity_scores %>%
+  group_by(gene_symbol) %>%
+  group_modify(~ calculate_p_values(.x))%>%
+  distinct(gene_symbol, condition, .keep_all = TRUE)
+
+ctrl_data <- results %>%
+  filter(condition == "CTRL") %>%
+  select(gene_symbol, ctrl_pi = mean_total_pi)
+
+results <- results %>%
+  left_join(ctrl_data, by = c("gene_symbol")) %>%
+  mutate(differential_pi = mean_total_pi-ctrl_pi)
+
+## Graph
+custom_colors <- c("CTRL" = "black", 
+                   "LEU" = "#4DAF4A", 
+                   "ILE" = "#377EB8", 
+                   "VAL" = "#FF7F00", 
+                   "DOUBLE" = "#40E0D0", 
+                   "TRIPLE" = "brown4")
+
+
+mean_lines <- polarity_scores %>%
+  group_by(condition) %>%
+  summarize(mean_value = mean(mean_total_pi, na.rm = TRUE))
+```
+
+```{r}
+Polarity <- ggplot(polarity_scores, aes(x = mean_total_pi, color = condition)) +
+  stat_ecdf(size = 1) +  # Use empirical cumulative distribution function
+  geom_vline(xintercept = 0, linetype = "longdash", size = 0.6, color = "black") +
+  scale_color_manual(values = custom_colors) +
+  labs(x = "Polarity Score", y = "Cumulative Fraction", title = "Cumulative Distribution of Polarity Scores") +
+  theme_classic() +
+  theme(
+    text = element_text(size = 14, family = "Arial", color = "black"),
+    axis.title.x = element_text(size = 14, family = "Arial", color = "black"),
+    axis.title.y = element_text(size = 14, family = "Arial", color = "black"),
+    axis.text = element_text(size = 14, family = "Arial", color = "black"),
+    legend.position = "none",
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  ) +
+  coord_cartesian(xlim = c(-0.4, 0.5)) + 
+  annotate("text", x = 0.15, y = 0.75, label = paste0("Mean:"), color = "black", hjust = 0, vjust = 1, size = 4, family = "Arial") +
+  annotate("text", x = 0.15, y = 0.7, label = paste0("Ctrl: ", round(mean_lines$mean_value[mean_lines$condition == "CTRL"], 3)),
+           color = custom_colors["CTRL"], hjust = 0, vjust = 2, size = 4, family = "Arial") +
+  annotate("text", x = 0.15, y = 0.65, label = paste0("Leu: ", round(mean_lines$mean_value[mean_lines$condition == "LEU"], 3)),
+           color = custom_colors["LEU"], hjust = 0, vjust = 3, size = 4, family = "Arial") +
+  annotate("text", x = 0.15, y = 0.6, label = paste0("Ile: ", round(mean_lines$mean_value[mean_lines$condition == "ILE"], 3)),
+           color = custom_colors["ILE"], hjust = 0, vjust = 4, size = 4, family = "Arial") +
+  annotate("text", x = 0.15, y = 0.55, label = paste0("Val: ", round(mean_lines$mean_value[mean_lines$condition == "VAL"], 3)),
+           color = custom_colors["VAL"], hjust = 0, vjust = 5, size = 4, family = "Arial") +
+  annotate("text", x = 0.15, y = 0.5, label = paste0("Double: ", round(mean_lines$mean_value[mean_lines$condition == "DOUBLE"], 3)),
+           color = custom_colors["DOUBLE"], hjust = 0, vjust = 6, size = 4, family = "Arial") +
+  annotate("text", x = 0.15, y = 0.45, label = paste0("Triple: ", round(mean_lines$mean_value[mean_lines$condition == "TRIPLE"], 3)),
+           color = custom_colors["TRIPLE"], hjust = 0, vjust = 7, size = 4, family = "Arial") 
+
+Polarity
+
+save(Polarity, file="../Figures/Polarity_distribution.RData")
+ggsave("../Figures/Polarity_distribution.svg", Polarity, width = 4, height = 3, dpi = 300 )
+ggsave("../Figures/Polarity_distribution.tiff", Polarity, width = 4, height = 3, dpi = 300 )
+```
+
+
+```{r}
+Polarity <- ggplot(polarity_scores, aes(x = mean_total_pi, color = condition)) +
+  geom_density(size = 1) +
+  geom_vline(data = mean_lines, aes(xintercept = mean_value, color = condition),
+             linetype = "longdash", size = 0.6) +
+  scale_color_manual(values = custom_colors) +
+  labs(x = "Polarity score", y = "Frequency", title = "Polarity Score") +
+  theme_classic() +
+  theme(
+    text = element_text(size = 14, family = "Arial", color = "black"),
+    axis.title.x = element_text(size = 14, family = "Arial", color = "black"),
+    axis.title.y = element_text(size = 14, family = "Arial", color = "black"),
+    axis.text = element_text(size = 14, family = "Arial", color = "black"),
+    legend.position = "none",
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  ) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(xlim = c(-0.4, 0.4))+
+  annotate("text", x = -0.4, y = 3.5, label = paste0("Ctrl: ", round(mean_lines$mean_value[mean_lines$condition == "CTRL"], 4)),
+           color = custom_colors["CTRL"], hjust = 0, vjust = 2, size = 4, family = "Arial") +
+  annotate("text", x = -0.4, y = 3, label = paste0("Leu: ", round(mean_lines$mean_value[mean_lines$condition == "LEU"], 4)),
+           color = custom_colors["LEU"], hjust = 0, vjust = 3, size = 4, family = "Arial") +
+  annotate("text", x = -0.4, y = 2.5, label = paste0("Ile: ", round(mean_lines$mean_value[mean_lines$condition == "ILE"], 4)),
+           color = custom_colors["ILE"], hjust = 0, vjust = 4, size = 4, family = "Arial") +
+  annotate("text", x = 0.4, y = 3.5, label = paste0("Val: ", round(mean_lines$mean_value[mean_lines$condition == "VAL"], 4)),
+           color = custom_colors["VAL"], hjust = 1, vjust = 2, size = 4, family = "Arial") +
+  annotate("text", x = 0.4, y = 3, label = paste0("Double: ", round(mean_lines$mean_value[mean_lines$condition == "DOUBLE"], 4)),
+           color = custom_colors["DOUBLE"], hjust = 1, vjust = 3, size = 4, family = "Arial") +
+  annotate("text", x = 0.4, y = 2.5, label = paste0("Triple: ", round(mean_lines$mean_value[mean_lines$condition == "TRIPLE"], 4)),
+           color = custom_colors["TRIPLE"], hjust = 1, vjust = 4, size = 4, family = "Arial")
+
+
+save(Polarity, file="../Figures/Polarity_distribution.RData")
+ggsave("../Figures/Polarity_distribution.svg", Polarity, width = 5, height = 3, dpi = 300 )
+ggsave("../Figures/Polarity_distribution.tiff", Polarity, width = 5, height = 3, dpi = 300 )
+
+
+### HEATMAP OF POLARITY DATA
+
+heatmap_data <- results %>%
+  select(gene_symbol, condition, differential_pi) %>%
+  tidyr::pivot_wider(names_from = condition, values_from = differential_pi)
+
+# Set the gene_symbol as rownames
+rownames(heatmap_data) <- heatmap_data$gene_symbol
+heatmap_data <- heatmap_data[, -1]
+heatmap_data <- heatmap_data[, -1]
+
+polarity_heat <- pheatmap(
+  heatmap_data,
+  color = colorRampPalette(c("darkblue", "white", "darkred"))(100), # Diverging color scale
+  cluster_rows = TRUE, 
+  cluster_cols = TRUE, 
+  display_numbers = FALSE,
+  breaks = seq(-0.4, 0.4, length.out = 101), # Center scale on 0
+  main = "", 
+  fontsize = 14,               # Set font size for all text
+  fontfamily = "Arial",        # Set font family to Arial
+  show_rownames = FALSE,       # Remove row names
+  show_colnames = TRUE,        # Keep column names
+  annotation_legend = FALSE    # Remove row annotations
+)
+
+save(polarity_heat, file = "../Figures/heatmap_plot_polarity.RData")
+
+# Save the plot as SVG
+ggsave("../Figures/heatmap_plot_polarity.svg",polarity_heat, width = 3, height = 8)
+ggsave("../Figures/heatmap_plot_polarity.tiff",polarity_heat, width = 3, height = 6)
+
+```
+# Identify genes with increase in the start of CDS: USING Polarity
+```{r}
+data_up <- results %>%
+  filter(differential_pi < -0.15 & p_value < 0.05) %>%
+  mutate(condition = recode(
+    condition,
+    "VAL" = "Val",
+    "TRIPLE" = "Triple",
+    "LEU" = "Leu",
+    "ILE" = "Ile",
+    "DOUBLE" = "Double",
+    "CTRL" = "Ctrl"
+  ))
+
+val_genes <- data_up %>%
+  filter(condition == "Val")
+
+ile_genes <- data_up %>%
+  filter(condition == "Ile")
+
+leu_genes <- data_up %>%
+  filter(condition == "Leu")
+
+double_genes <- data_up %>%
+  filter(condition == "Double")
+
+triple_genes <- data_up %>%
+  filter(condition == "Triple")
+
+gene_list <- list(
+  Ile = ile_genes$gene_symbol,
+  Leu = leu_genes$gene_symbol,
+  Val = val_genes$gene_symbol,
+  Double = double_genes$gene_symbol,
+  Triple = triple_genes$gene_symbol
+)
+
+library(UpSetR)
+upset_plot_Polarity <- upset(
+  fromList(gene_list),
+  sets = c("Ile", "Leu", "Val", "Double", "Triple"),
+  sets.bar.color = "gray",         # Bar color for sets
+  main.bar.color = "black",        # Bar color for intersections
+  matrix.color = "black",          # Color for the matrix points
+  point.size = 3.5,                  # Size of matrix points
+  line.size = 1.5,                   # Line size for connections
+  text.scale = c(2, 2, 1.5, 1.5, 1.5, 1.5),  # Text scaling for axes and titles
+  order.by = "freq",                 # Order by intersection size
+  keep.order = TRUE,                  
+  number.angles = 45,                 
+  mainbar.y.label = "Intersection Size",   
+  sets.x.label = "Set Size",          
+  matrix.dot.alpha = 0.7
+)
+
+save(gene_list, file = "../Data/Genes with increased 5coverage_Polarity.RData")
+
+svg("../Figures/Overlap_metagene_Polarity.svg", width = 8, height = 5)
+print(upset_plot_Polarity)
+dev.off()
+save(upset_plot_Polarity, file = "../Figures/upset_plot_Polarity.RData")
+```
+```{r}
+# Load required packages
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(patchwork)
+
+### Data Preparation ###
+# Assume that 'gene_list' is already created with elements: Ile, Leu, Val, Double, Triple
+# Create a data frame with one row per gene and columns indicating membership in each set
+all_genes <- unique(unlist(gene_list))
+df_upset <- data.frame(gene = all_genes, stringsAsFactors = FALSE) %>%
+  mutate(
+    Ile    = gene %in% gene_list$Ile,
+    Leu    = gene %in% gene_list$Leu,
+    Val    = gene %in% gene_list$Val,
+    Double = gene %in% gene_list$Double,
+    Triple = gene %in% gene_list$Triple
+  )
+
+### Compute Intersection Counts ###
+# For each unique combination of membership across the five sets, compute the number of genes.
+# Also, create a label (e.g. "ILV" for genes in Ile, Leu, and Val).
+df_bar <- df_upset %>%
+  group_by(Ile, Leu, Val, Double, Triple) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  filter(count > 0) %>%
+  mutate(intersection = paste0(
+    if_else(Ile,    "I", ""),
+    if_else(Leu,    "L", ""),
+    if_else(Val,    "V", ""),
+    if_else(Double, "D", ""),
+    if_else(Triple, "T", "")
+  )) %>%
+  arrange(desc(count)) %>%
+  mutate(intersection = factor(intersection, levels = unique(intersection)))
+
+### Create the Dot Matrix Data ###
+# For each intersection, pivot the membership data into long format.
+df_matrix <- df_bar %>%
+  select(intersection, Ile, Leu, Val, Double, Triple) %>%
+  pivot_longer(cols = c(Ile, Leu, Val, Double, Triple),
+               names_to = "set", values_to = "present")
+
+# Specify the order of sets (rows) as desired.
+df_matrix$set <- factor(df_matrix$set, levels = c("Ile", "Leu", "Val", "Double", "Triple"))
+
+# For each intersection group, compute the lowest and highest row (numeric value of 'set') where membership is TRUE.
+df_lines <- df_matrix %>%
+  filter(present) %>%
+  group_by(intersection) %>%
+  summarize(
+    y_min = min(as.numeric(set)),
+    y_max = max(as.numeric(set)),
+    .groups = "drop"
+  ) %>%
+  mutate(x = as.numeric(intersection))
+
+### Compute Set Sizes ###
+# Calculate total number of genes in each set.
+df_set_sizes <- data.frame(
+  set = c("Ile", "Leu", "Val", "Double", "Triple"),
+  size = sapply(c("Ile", "Leu", "Val", "Double", "Triple"), function(x) sum(df_upset[[x]]))
+)
+df_set_sizes$set <- factor(df_set_sizes$set, levels = c("Ile", "Leu", "Val", "Double", "Triple"))
+
+### Create the Plots ###
+p_top <- ggplot(df_bar, aes(x = intersection, y = count)) +
+  geom_col(fill = "black", width = 0.7) +
+  labs(y = "Intersection Size", x = NULL) +
+  theme_classic(base_family = "Arial", base_size = 14) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text.y = element_text(color = "black", size = 14, family = "Arial"),
+    text = element_text(color = "black", size = 14, family = "Arial")
+  )
+
+# Main panel: Dot matrix plot
+p_matrix <- ggplot() +
+  # Dots for intersections where the set is present
+  geom_point(data = df_matrix %>% filter(present),
+             aes(x = as.numeric(intersection), y = as.numeric(set)),
+             shape = 21, size = 3, fill = "black", color = "black") +
+  geom_segment(data = df_lines,
+               aes(x = x, xend = x, y = y_min, yend = y_max),
+               color = "black", size = 0.5) +
+  scale_x_continuous(breaks = 1:length(levels(df_bar$intersection)),
+                     labels = levels(df_bar$intersection)) +
+  scale_y_continuous(breaks = 1:length(levels(df_matrix$set)),
+                     labels = levels(df_matrix$set)) +
+  labs(x = "Intersections", y = "Sets") +
+  theme_classic(base_family = "Arial", base_size = 14) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.line.x = element_blank(),
+    axis.text.y = element_text(color = "black", size = 14, family = "Arial"),
+    axis.title = element_text(color = "black", size = 14, family = "Arial"),
+    text = element_text(color = "black", size = 14, family = "Arial")
+  )
+
+
+### Assemble the Final Plot ###
+# Combine the left panel and the dot matrix as the bottom row.
+p_bottom <- p_matrix
+# Stack the top panel (intersection sizes) above the bottom row.
+p_final <- p_top / p_bottom
+
+### Save and Display the Plot ###
+ggsave("../Figures/Overlap_metagene_Polarity_ggplot.tiff", plot = p_final, width = 8, height = 4, dpi = 300)
+print(p_final)
+
+```
+
+
+```{r}
+# GENES WITH INCREASE IN 5': Codon bias!!
+leu_codons <- c("UUA", "UUG", "CUU", "CUC", "CUA", "CUG")
+ile_codons <- c("AUU", "AUC", "AUA")
+val_codons <- c("GUU", "GUC", "GUA", "GUG")
+all_codons <- c(val_codons, leu_codons, ile_codons)
+
+calculate_normalized_codon_counts <- function(data, codon_list, gene_filter = NULL) {
+  
+   data_filtered <- data %>%
+   filter(normalized_position <= 20 & Sample == "Lina_CTRL_1_RIBO_NA")
+ 
+  if (!is.null(gene_filter)) {
+    data_filtered <- data_filtered %>%
+    filter(gene_symbol %in% gene_filter)
+  }
+  
+  total_codons_per_gene <- data_filtered %>%
+    group_by(gene_symbol) %>%
+    summarise(total_codons = n(), .groups = 'drop')
+  
+  codon_counts <- data_filtered %>%
+    filter(codons %in% codon_list) %>%
+    group_by(gene_symbol, codons) %>%
+    summarise(codon_count = n(), .groups = 'drop') %>%
+    left_join(total_codons_per_gene, by = "gene_symbol") %>%
+    mutate(normalized_codon_count = codon_count / total_codons) %>%
+    select(gene_symbol, codons, normalized_codon_count) %>%
+    pivot_wider(
+    names_from = codons,
+    values_from = normalized_codon_count,
+    values_fill = list(normalized_codon_count = 0)
+  )
+  
+  return(codon_counts)
+}
+
+
+codon_counts_all <- calculate_normalized_codon_counts(data, all_codons)
+codon_counts_Val <- calculate_normalized_codon_counts(data, all_codons, val_genes$gene_symbol)
+codon_counts_Leu <- calculate_normalized_codon_counts(data, all_codons, leu_genes$gene_symbol)
+codon_counts_Ile <- calculate_normalized_codon_counts(data, all_codons, ile_genes$gene_symbol)
+codon_counts_Double <- calculate_normalized_codon_counts(data, all_codons, double_genes$gene_symbol)
+codon_counts_Triple <- calculate_normalized_codon_counts(data, all_codons, triple_genes$gene_symbol)
+
+
+### Statistics
+
+perform_statistical_tests <- function(control_df, condition_df) {
+  p_values <- sapply(colnames(control_df)[-1], function(codon) {
+    control_values <- control_df[[codon]]
+    condition_values <- condition_df[[codon]]
+    test_result <- t.test(condition_values, control_values, paired = FALSE)
+    return(test_result$p.value)
+  })
+  return(as.data.frame(t(p_values)))
+}
+
+adjust_p_values <- function(p_values_df) {
+  return(as.data.frame(apply(p_values_df, 2, p.adjust, method = "BH")))
+}
+
+conditions <- list(Val = codon_counts_Val, Leu = codon_counts_Leu, Ile = codon_counts_Ile, 
+                   Double = codon_counts_Double, Triple = codon_counts_Triple)
+
+adjusted_p_values <- lapply(conditions, function(condition_df) {
+  p_values <- perform_statistical_tests(codon_counts_all, condition_df)
+  adjust_p_values(p_values)
+})
+
+results_summary <- data.frame(
+  codons = colnames(codon_counts_all)[-1],  # Codon names
+  p_values_Val = as.vector(t(adjusted_p_values$Val)),
+  p_values_Leu = as.vector(t(adjusted_p_values$Leu)),
+  p_values_Ile = as.vector(t(adjusted_p_values$Ile)),
+  p_values_Double = as.vector(t(adjusted_p_values$Double)),
+  p_values_Triple = as.vector(t(adjusted_p_values$Triple))
+)
+
+calculate_and_transform_means <- function(df, cond) {
+  df_no_gene <- df[, -1]
+  column_means <- colMeans(df_no_gene, na.rm = TRUE)
+  transformed_df <- as.data.frame(column_means)
+  transformed_df$codons <- rownames(transformed_df)
+  transformed_df <- transformed_df[, c("codons", "column_means")]
+  colnames(transformed_df)[2] <- paste0("mean_", cond)
+  return(transformed_df)
+}
+
+transformed_means_all <- calculate_and_transform_means(codon_counts_all, "Ctrl")
+transformed_means_Val <- calculate_and_transform_means(codon_counts_Val, "Val")
+transformed_means_Leu <- calculate_and_transform_means(codon_counts_Leu, "Leu")
+transformed_means_Ile <- calculate_and_transform_means(codon_counts_Ile, "Ile")
+transformed_means_Double <- calculate_and_transform_means(codon_counts_Double, "Double")
+transformed_means_Triple <- calculate_and_transform_means(codon_counts_Triple, "Triple")
+
+means_list <- list(
+  transformed_means_all,
+  transformed_means_Val,
+  transformed_means_Leu,
+  transformed_means_Ile,
+  transformed_means_Double,
+  transformed_means_Triple,
+  results_summary
+)
+
+combined_means <- means_list %>% purrr::reduce(full_join, by='codons')
+
+
+## GRAPH
+df1 <- combined_means %>%
+  mutate(
+    log2FC_Val = log2(mean_Val / mean_Ctrl),
+    log2FC_Leu = log2(mean_Leu / mean_Ctrl),
+    log2FC_Ile = log2(mean_Ile / mean_Ctrl),
+    log2FC_Double = log2(mean_Double / mean_Ctrl),
+    log2FC_Triple = log2(mean_Triple / mean_Ctrl)) %>%
+  pivot_longer(
+    cols = starts_with("log2FC"),
+    names_to = "Condition",
+    values_to = "log2FC") %>%
+  mutate(Condition = str_remove(Condition, "^log2FC_")) %>%
+  select(codons, Condition, log2FC)
+
+df2 <- combined_means %>%
+  pivot_longer(
+    cols = starts_with("p_values"),
+    names_to = "Condition",
+    values_to = "p_value") %>%
+  mutate(Condition = str_remove(Condition, "^p_values_")) %>%
+  select(codons, Condition, p_value)
+
+df <- merge(df1, df2, by=c("codons", "Condition"))
+
+df <- df %>%
+  mutate(
+    Condition = factor(Condition, levels = c("Leu", "Ile", "Val", "Double", "Triple")),
+    Amino_Acid_Group = case_when(
+      codons %in% c("TTA", "TTG", "CTT", "CTC", "CTA", "CTG") ~ "Leu codons",
+      codons %in% c("ATC", "ATA", "ATT") ~ "Ile codons",
+      codons %in% c("GTT", "GTC", "GTA", "GTG") ~ "Val codons",
+      TRUE ~ "Other"
+    ),
+    size = ifelse(p_value > 0.01, 0, -log10(p_value))
+  )
+
+dotplot_Polarity_20 <- ggplot(df, aes(x = codons, y = Condition)) +
+  geom_point(aes(fill = log2FC, size = size), shape = 21, stroke = 0.75) +
+  scale_fill_gradientn(colors = colorRampPalette(c("darkblue", "white", "darkred"))(100), 
+                       limits = c(-1.3, 1.3)) +
+  scale_size_continuous(range = c(0.001, 5), name = "-log10(p-value)") +
+  facet_wrap(~ Amino_Acid_Group, scales = "free_x", nrow = 1) +
+  theme_classic(base_family = "Arial") +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 14, color = "black", family = "Arial"),
+    axis.text.y = element_text(size = 14, color = "black", family = "Arial"),
+    axis.title.x = element_text(size = 14, color = "black", family = "Arial"),
+    axis.title.y = element_text(size = 14, color = "black", family = "Arial"),
+    strip.text = element_text(size = 14, color = "black", family = "Arial"),  # For facet labels
+    legend.text = element_text(size = 14, color = "black", family = "Arial"), # Legend text
+    legend.title = element_text(size = 14, color = "black", family = "Arial"),# Legend title
+    legend.position = "right"
+  ) +
+  xlab("Codons") +
+  ylab("Condition") +
+  labs(fill = "log2FC", size = "-log10(p-value)")
+
+dotplot_Polarity_20
+
+save(dotplot_Polarity_20, file="../Figures/dotplot_Polarity_20.RData")
+ggsave("../Figures/dotplot_Polarity_20.png", dotplot_Polarity_20, width = 7, height = 3, dpi = 300)
+```
+
+
+

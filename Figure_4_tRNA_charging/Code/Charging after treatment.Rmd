@@ -1,0 +1,210 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-08-23"
+---
+
+```{r}
+library(readxl)
+tRNA_measurements <- read_excel("../Data/All_Replicates.xlsx")
+```
+```{r}
+deprivation_conditions <- c("Leu", "Ile", "Val", "Double", "Triple")
+
+for (deprivation in deprivation_conditions) {
+  control_data <- tRNA_measurements %>%
+    filter(Deprivation == "Ctrl" & Treatment == "untreated")
+  
+  tRNA_sub <- tRNA_measurements %>%
+    filter(Deprivation %in% c(deprivation) & Treatment %in% c("untreated", "CHX", "Mg132")) %>%
+    group_by(tRNA, Fraction, Treatment) %>%
+    summarize(
+      p_value = t.test(Amount[Deprivation == deprivation], 
+                       control_data$Amount)$p.value,
+      Mean = mean(Amount, na.rm = TRUE),
+      SEM = sd(Amount, na.rm = TRUE) / sqrt(n())
+    ) %>%
+    ungroup() %>%
+    pivot_wider(names_from = Fraction, values_from = c(Mean, SEM, p_value))
+  
+  tRNA_sub$Treatment <- factor(tRNA_sub$Treatment, levels = c("untreated", "CHX", "Mg132"))
+  
+  tRNA_colors <- c("Ile" = "#377EB8", "Leu" = "#4DAF4A", "Val" = "#FF7F00")
+  
+  tRNA_sub$tRNA_type <- ifelse(grepl("Ile", tRNA_sub$tRNA), "Ile",
+                             ifelse(grepl("Leu", tRNA_sub$tRNA), "Leu",
+                                    ifelse(grepl("Val", tRNA_sub$tRNA), "Val", "Other")))
+  
+  plot_name <- paste0("plot_", deprivation)
+  
+ plot <- ggplot(tRNA_sub, aes(x = log2(Mean_Total), y = log2(Mean_Charged), fill = tRNA_type)) +
+  # Non-significant points (smaller size)
+  geom_point(data = tRNA_sub %>% filter(!(log2(Mean_Charged) < -1 & p_value_Charged < 0.05)),
+             shape = 21, size = 2, color = "black") +
+  # Significant points (larger size)
+  geom_point(data = tRNA_sub %>% filter(log2(Mean_Charged) < -1 & p_value_Charged < 0.05),
+             shape = 21, size = 4, color = "black") +
+  geom_errorbar(aes(xmin = log2(Mean_Total - SEM_Total), xmax = log2(Mean_Total + SEM_Total)),
+                width = 0.1, color = "black", alpha = 0.3) +
+  geom_errorbar(aes(ymin = log2(Mean_Charged - SEM_Charged), ymax = log2(Mean_Charged + SEM_Charged)),
+                width = 0.1, color = "black", alpha = 0.3) +
+  geom_text_repel(aes(label = tRNA), size = 3, box.padding = 0.5, max.overlaps = Inf) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  facet_wrap(~ Treatment, scales = "fixed", ncol = 3) +
+  scale_fill_manual(
+    values = c("Ile" = "#377EB8", "Leu" = "#4DAF4A", "Val" = "#FF7F00"),
+    name = "tRNA Type") +
+  theme_classic() +
+  labs(
+    x = "Log2(Total tRNA Amount)",
+    y = "Log2(Charged tRNA Amount)" ) +
+  theme(
+    legend.position = "right",
+    text = element_text(family = "Arial", size = 14, color = "black"),
+    plot.title = element_text(),
+    axis.title = element_text(),
+    strip.text = element_text())+
+    coord_cartesian(
+    xlim = c(-2, 2),  
+    ylim = c(-5, 2))
+
+
+  
+  # Save the plot object dynamically
+  assign(plot_name, plot)
+  save(list = plot_name, file = paste0("../Figures/", plot_name, ".RData"))
+  
+  # Save as SVG using the dynamic plot object
+  ggsave(filename = paste0("../Figures/", plot_name, ".svg"), plot = plot, width = 9, height = 3, units = "in", dpi = 300)
+}
+
+```
+
+### AS DOTPLOT!!!!
+```{r}
+###CHARGED
+deprivation_conditions <- c("Leu", "Ile", "Val", "Double", "Triple")
+
+control_data <- tRNA_measurements %>%
+    filter(Deprivation == "Ctrl" & Treatment == "untreated", Fraction =="Charged")
+
+for (deprivation in deprivation_conditions) {
+  tRNA_sub <- tRNA_measurements %>%
+    filter(Deprivation %in% c(deprivation) & Fraction == "Charged") %>%
+    group_by(tRNA, Treatment) %>%
+    summarize(p_value = t.test(Amount[Deprivation == deprivation], 
+                       control_data$Amount)$p.value,
+              Mean_Charged = mean(Amount, na.rm = TRUE),
+              SEM_Charged = sd(Amount, na.rm = TRUE) / sqrt(n())) %>%
+    ungroup()
+tRNA_sub <- tRNA_sub %>%
+    mutate(sig = ifelse(p_value < 0.01 & Mean_Charged < 1, "significant", "not_significant"))
+
+tRNA_sub$Treatment <- factor(tRNA_sub$Treatment, levels = c("untreated", "CHX", "Mg132"))
+  
+plot_name <- paste0("dotplot_", deprivation)
+  
+plot <- ggplot(tRNA_sub, aes(x = tRNA, y = log2(Mean_Charged), fill = Treatment)) +
+ geom_point(
+      aes(size = sig, shape = sig), 
+      position = position_dodge(width = 0.2), 
+      color = ifelse(tRNA_sub$sig == "significant", "black", "white"),
+      stroke = ifelse(tRNA_sub$sig == "significant", 1, 0.5)
+    ) +
+    geom_errorbar(
+      aes(ymin = log2(Mean_Charged - SEM_Charged), ymax = log2(Mean_Charged + SEM_Charged)),
+      position = position_dodge(width = 0.2), width = 0.1, color = "black"
+    ) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") + 
+  theme_classic() +
+  labs(x = "tRNA", y = "log2FC") +
+  scale_fill_manual(
+      values = c("untreated" = "#fdc010", "CHX" = "#43a047", "Mg132" = "#09bcd3"),
+      labels = c("untreated" = "Untreated", "CHX" = "Inhibition Translation", "Mg132" = "Inhibition AA Recycling"),
+      name = "Treatment"
+    ) +
+    scale_size_manual(values = c("significant" = 5, "not_significant" = 4), guide = "none") + # Significant points are larger
+    scale_shape_manual(values = c("significant" = 21, "not_significant" = 21), guide = "none") + # All same shape
+  theme(
+    text = element_text(size = 14, family = "Arial", color = "black"), # Global text style
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 14, family = "Arial", color = "black"),
+    axis.text.y = element_text(size = 14, family = "Arial", color = "black"),
+    axis.title = element_text(size = 14, family = "Arial", color = "black"),
+    legend.position = "none"
+  ) +
+  coord_cartesian(
+    ylim = c(-5, 5)
+  )
+
+  assign(plot_name, plot)
+  save(list = plot_name, file = paste0("../Figures/", plot_name, ".RData"))
+  
+  ggsave(filename = paste0("../Figures/", plot_name, ".png"), plot = plot, width = 4, height = 4, units = "in", dpi = 300)
+}
+```
+
+
+```{r}
+###TOTAL
+deprivation_conditions <- c("Leu", "Ile", "Val", "Double", "Triple")
+
+control_data <- tRNA_measurements %>%
+    filter(Deprivation == "Ctrl" & Treatment == "untreated", Fraction =="Total")
+
+for (deprivation in deprivation_conditions) {
+  tRNA_sub <- tRNA_measurements %>%
+    filter(Deprivation %in% c(deprivation) & Fraction == "Total") %>%
+    group_by(tRNA, Treatment) %>%
+    summarize(p_value = t.test(Amount[Deprivation == deprivation], 
+                       control_data$Amount)$p.value,
+              Mean_Charged = mean(Amount, na.rm = TRUE),
+              SEM_Charged = sd(Amount, na.rm = TRUE) / sqrt(n())) %>%
+    ungroup()
+tRNA_sub <- tRNA_sub %>%
+    mutate(sig = ifelse(p_value < 0.01 & Mean_Charged < 1, "significant", "not_significant"))
+
+tRNA_sub$Treatment <- factor(tRNA_sub$Treatment, levels = c("untreated", "CHX", "Mg132"))
+  
+plot_name <- paste0("dotplot_", deprivation)
+  
+plot <- ggplot(tRNA_sub, aes(x = tRNA, y = log2(Mean_Charged), fill = Treatment)) +
+ geom_point(
+      aes(size = sig, shape = sig), 
+      position = position_dodge(width = 0.2), 
+      color = ifelse(tRNA_sub$sig == "significant", "black", "white"),
+      stroke = ifelse(tRNA_sub$sig == "significant", 1, 0.5)
+    ) +
+    geom_errorbar(
+      aes(ymin = log2(Mean_Charged - SEM_Charged), ymax = log2(Mean_Charged + SEM_Charged)),
+      position = position_dodge(width = 0.2), width = 0.1, color = "black"
+    ) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") + 
+  theme_classic() +
+  labs(x = "tRNA", y = "log2FC") +
+  scale_fill_manual(
+      values = c("untreated" = "#fdc010", "CHX" = "#43a047", "Mg132" = "#09bcd3"),
+      labels = c("untreated" = "Untreated", "CHX" = "Inhibition Translation", "Mg132" = "Inhibition AA Recycling"),
+      name = "Treatment"
+    ) +
+    scale_size_manual(values = c("significant" = 5, "not_significant" = 4), guide = "none") + # Significant points are larger
+    scale_shape_manual(values = c("significant" = 21, "not_significant" = 21), guide = "none") + # All same shape
+  theme(
+    text = element_text(size = 14, family = "Arial", color = "black"), # Global text style
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 14, family = "Arial", color = "black"),
+    axis.text.y = element_text(size = 14, family = "Arial", color = "black"),
+    axis.title = element_text(size = 14, family = "Arial", color = "black"),
+    legend.position = "none"
+  ) +
+  coord_cartesian(
+    ylim = c(-5, 5)
+  )
+
+  assign(plot_name, plot)
+  save(list = plot_name, file = paste0("../Figures/Total_", plot_name, ".RData"))
+  
+  ggsave(filename = paste0("../Figures/Total_", plot_name, ".png"), plot = plot, width = 4, height = 4, units = "in", dpi = 300)
+}
+
+```
+

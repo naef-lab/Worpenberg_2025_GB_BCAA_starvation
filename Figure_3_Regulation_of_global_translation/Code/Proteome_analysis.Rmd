@@ -1,0 +1,901 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+load("../../General_datasets/Proteome_logFC.RData")
+load("../../General_datasets/log2FC_pValue.RData")
+
+Proteome <- Proteome_logFC %>%
+  filter(Gene %in% EdgeR_all$Gene)
+
+Proteome <- Proteome %>%
+  inner_join(EdgeR_all, by = c("Gene"))
+```
+
+##Create lists for up and down regulated proteins###
+```{r}
+treatments <- c("Leu", "Ile", "Val", "Double", "Triple")
+
+# All Conditions
+Val_all <- Proteome %>%
+  filter(Proteome_Val_PValue < 0.01 & (Proteome_Val_logFC < -0.26 | Proteome_Val_logFC > 0.26)) %>%
+  select(Gene)
+
+Leu_all <- Proteome %>%
+  filter(Proteome_Leu_PValue < 0.01 & (Proteome_Leu_logFC < -0.26 | Proteome_Leu_logFC > 0.26)) %>%
+  select(Gene)
+
+Ile_all <- Proteome %>%
+  filter(Proteome_Ile_PValue < 0.01 & (Proteome_Ile_logFC < -0.26 | Proteome_Ile_logFC > 0.26)) %>%
+  select(Gene)
+
+Double_all <- Proteome %>%
+  filter(Proteome_Double_PValue < 0.01 & (Proteome_Double_logFC < -0.26 | Proteome_Double_logFC > 0.26)) %>%
+  select(Gene)
+
+Triple_all <- Proteome %>%
+  filter(Proteome_Triple_PValue < 0.01 & (Proteome_Triple_logFC < -0.26 | Proteome_Triple_logFC > 0.26)) %>%
+  select(Gene)
+
+filtered_proteins <- rbind(Val_all, Leu_all, Ile_all, Double_all, Triple_all)
+
+# Down Conditions
+Val_Down <- Proteome %>%
+  filter(Proteome_Val_PValue < 0.01 & Proteome_Val_logFC < -0.26) %>%
+  select(Gene)
+
+Leu_Down <- Proteome %>%
+  filter(Proteome_Leu_PValue < 0.01 & Proteome_Leu_logFC < -0.26) %>%
+  select(Gene)
+
+Ile_Down <- Proteome %>%
+  filter(Proteome_Ile_PValue < 0.01 & Proteome_Ile_logFC < -0.26) %>%
+  select(Gene)
+
+Double_Down <- Proteome %>%
+  filter(Proteome_Double_PValue < 0.01 & Proteome_Double_logFC < -0.26) %>%
+  select(Gene)
+
+Triple_Down <- Proteome %>%
+  filter(Proteome_Triple_PValue < 0.01 & Proteome_Triple_logFC < -0.26) %>%
+  select(Gene)
+
+filtered_proteins_down <- rbind(Val_Down, Leu_Down, Ile_Down, Double_Down, Triple_Down)
+
+# Up Conditions
+Val_Up <- Proteome %>%
+  filter(Proteome_Val_PValue < 0.01 & Proteome_Val_logFC > 0.26) %>%
+  select(Gene)
+
+Leu_Up <- Proteome %>%
+  filter(Proteome_Leu_PValue < 0.01 & Proteome_Leu_logFC > 0.26) %>%
+  select(Gene)
+
+Ile_Up <- Proteome %>%
+  filter(Proteome_Ile_PValue < 0.01 & Proteome_Ile_logFC > 0.26) %>%
+  select(Gene)
+
+Double_Up <- Proteome %>%
+  filter(Proteome_Double_PValue < 0.01 & Proteome_Double_logFC > 0.26) %>%
+  select(Gene)
+
+Triple_Up <- Proteome %>%
+  filter(Proteome_Triple_PValue < 0.01 & Proteome_Triple_logFC > 0.26) %>%
+  select(Gene)
+
+
+filtered_proteins_up <- rbind(Val_Up, Leu_Up, Ile_Up, Double_Up, Triple_Up)
+```
+
+
+
+#####################################BAR PLOT FOR GENE COUNTS####################################################################
+```{r}
+gene_counts <- data.frame(
+  Treatment = treatments,
+  Upregulated = c(nrow(Leu_Up), nrow(Ile_Up), nrow(Val_Up), nrow(Double_Up), nrow(Triple_Up)),
+  Downregulated = c(nrow(Leu_Down), nrow(Ile_Down), nrow(Val_Down), nrow(Double_Down), nrow(Triple_Down))
+)
+
+gene_counts_long <- gene_counts %>%
+  pivot_longer(cols = c("Upregulated", "Downregulated"), names_to = "Regulation", values_to = "Count")
+gene_counts_long$Treatment <- factor(gene_counts_long$Treatment, levels = treatments)
+
+Protein_count <- ggplot(gene_counts_long, aes(x = Treatment, y = Count, fill = Regulation)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  geom_text(aes(label = Count), 
+            position = position_dodge(width = 0.9), 
+            vjust = 0.4, 
+            hjust = -0.1, 
+            angle = 90, 
+            color = "black", 
+            size = 4) +
+  labs(x = "Deprivation", y = "Number of Proteins") +
+  scale_y_continuous(limits = c(0,250))+
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), 
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    legend.position = "top",
+    legend.title = element_blank(),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")) +
+  scale_fill_manual(values = c("Upregulated" = "darkred", "Downregulated" = "blue")) +
+  theme(axis.text.x = element_text(angle = 90))
+
+Protein_count
+
+save(Protein_count, file="../Figures/Proteome_counts.RData")
+ggsave(filename = "../Figures/Proteome_counts.png", plot = Protein_count, width = 3, height = 4, dpi = 300)
+```
+
+#######################COMPARISON DOWNREGULATED PROTEINS TO RNAvsRPF ############################################################################################################
+```{r}
+plot_condition <- function(condition, proteome_down, proteome_up) {
+  
+  proteome_logFC_col <- paste0("Proteome_", condition, "_logFC")
+  proteome_pValue_col <- paste0("Proteome_", condition, "_PValue")
+  te_logFC_col <- paste0("TE_", condition, "_logFC")
+  rpf_logFC_col <- paste0("RPF_", condition, "_logFC")
+  rpf_pValue_col <- paste0("RPF_", condition, "_PValue")
+  rna_logFC_col <- paste0("RNA_", condition, "_logFC")
+  
+filtered_data <- Proteome 
+#   %>%mutate(protein_down = Gene %in% proteome_down$Gene)%>%
+#    mutate(protein_up = Gene %in% proteome_up$Gene)
+  
+   # Plot 1: Proteome logFC vs TE logFC
+ Proteome_vs_RPF <- ggplot(filtered_data, aes_string(x = proteome_logFC_col, y = rpf_logFC_col)) +
+    geom_point(data = filtered_data, 
+             aes_string(x = proteome_logFC_col, y = rpf_logFC_col), 
+             color = "gray", size = 1, alpha=0.5) +
+   
+  geom_point(data = filtered_data %>% 
+               filter((!!sym(rpf_logFC_col) > 0.58 | !!sym(rpf_logFC_col) < -0.58) & 
+                      !!sym(rpf_pValue_col) < 0.05 & 
+                      (!!sym(proteome_logFC_col) > 0.26 | !!sym(proteome_logFC_col) < -0.26) & 
+                      !!sym(proteome_pValue_col) < 0.01 & 
+                      !(!!sym(rpf_logFC_col) > 0 & !!sym(proteome_logFC_col) < -0 & !!sym(proteome_pValue_col) < 0.05)), 
+             aes_string(x = proteome_logFC_col, y = rpf_logFC_col), 
+             fill = "gray", size = 3, shape = 21) +
+  
+  geom_text_repel(data = filtered_data %>% 
+                    filter((!!sym(rpf_logFC_col) > 0.58 | !!sym(rpf_logFC_col) < -0.58) & 
+                           !!sym(rpf_pValue_col) < 0.05 & 
+                           (!!sym(proteome_logFC_col) > 0.26 | !!sym(proteome_logFC_col) < -0.26) & 
+                           !!sym(proteome_pValue_col) < 0.01 & 
+                           !(!!sym(rpf_logFC_col) > 0 & !!sym(proteome_logFC_col) < -0 & !!sym(proteome_pValue_col) < 0.05)), 
+                  aes_string(x = proteome_logFC_col, y = rpf_logFC_col, label = "Gene"), 
+                  size = 3, color = "black", max.overlaps = 5) +
+   
+  geom_point(data = filtered_data %>% filter(!!sym(rpf_logFC_col) > 0 & !!sym(proteome_logFC_col) < -0.26 & !!sym(proteome_pValue_col) < 0.01), 
+             aes_string(x = proteome_logFC_col, y = rpf_logFC_col), 
+             fill = "darkblue", size = 3, shape = 21) +
+  geom_text_repel(data = filtered_data %>% filter(!!sym(rpf_logFC_col) > 0 & !!sym(proteome_logFC_col) < -0.26 & !!sym(proteome_pValue_col) < 0.01),
+             aes_string(x = proteome_logFC_col, y = rpf_logFC_col, label = "Gene"),size = 3,color = "darkblue",max.overlaps = 20) +
+   
+  labs(x = "Proteome logFC", y = "Riboseq logFC", 
+       title = paste("Proteome logFC vs Riboseq logFC for", condition)) +
+  #coord_cartesian(xlim = c(-1.5, 1.5), ylim = c(-1.5, 1.5)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+ theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.background = element_rect(fill = "transparent", colour = NA),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_blank())
+
+  
+  # Plot 2: RPF logFC vs RNA logFC
+#  RPF_vs_RNA <- ggplot(filtered_data, aes_string(x = rna_logFC_col, y = rpf_logFC_col)) +
+#  geom_point(data = filtered_data %>% filter(!protein_down), aes_string(x = rna_logFC_col, y = rpf_logFC_col), 
+#             color = "gray", size = 1.5) +
+#    geom_point(data = filtered_data %>% filter(protein_down), aes_string(x = rna_logFC_col, y = rpf_logFC_col), 
+#               fill = "darkblue", size = 3, shape=21) +
+#    #geom_point(data = filtered_data %>% filter(protein_up), aes_string(x = rna_logFC_col, y = rpf_logFC_col), 
+#    #           fill = "darkred", size = 3, shape=21) +
+#   labs(x = "RNA logFC", y = "RPF logFC", title = paste("RPF logFC vs RNA logFC for", condition)) +
+#    coord_cartesian(xlim = c(-2, 2), ylim = c(-2, 2))+
+#    geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+#    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+#    theme_classic()
+
+#  list(Proteome_vs_RPF=Proteome_vs_RPF, RPF_vs_RNA=RPF_vs_RNA)
+}
+
+# Conditions and corresponding downregulated proteins
+conditions <- c("Val", "Leu", "Ile", "Double", "Triple")
+downregulated_proteins <- list(Val_Down, Leu_Down, Ile_Down, Double_Down, Triple_Down)
+upregulated_proteins <- list(Val_Up, Leu_Up, Ile_Up, Double_Up, Triple_Up)
+
+# Generate and store plots for each condition
+plots <- lapply(seq_along(conditions), function(i) {
+  plot_condition(conditions[i], downregulated_proteins[[i]], upregulated_proteins[[i]])
+})
+
+# Display the plots
+for (i in seq_along(conditions)) {
+  print(plots[[i]]$Proteome_vs_RPF)
+  print(plots[[i]]$ RPF_vs_RNA)
+}
+
+for (i in seq_along(conditions)) {
+  rdata_file_name <- paste0("../Figures/Proteome_vs_RPF_", conditions[i], ".RData")
+  svg_file_name <- paste0("../Figures/Proteome_vs_RPF_", conditions[i], ".tiff")
+  plot_name <- paste0("Proteome_vs_RPF_", conditions[i])
+  assign(plot_name, plots[[i]]$Proteome_vs_RPF)
+  save(list = plot_name, file = rdata_file_name)
+  ggsave(filename = svg_file_name,plot = get(plot_name),width = 4,height = 3,dpi = 300)
+}
+```
+
+
+
+
+```{r}
+plot_condition <- function(condition) {
+  
+  proteome_logFC_col <- paste0("Proteome_", condition, "_logFC")
+  proteome_pValue_col <- paste0("Proteome_", condition, "_PValue")
+  te_logFC_col <- paste0("TE_", condition, "_logFC")
+  rpf_logFC_col <- paste0("RPF_", condition, "_logFC")
+  rpf_pValue_col <- paste0("RPF_", condition, "_PValue")
+  rna_logFC_col <- paste0("RNA_", condition, "_logFC")
+  
+filtered_data <- Proteome 
+
+ Proteome_vs_RPF <- ggplot(filtered_data, aes_string(x = proteome_logFC_col, y = rpf_logFC_col)) +
+    geom_point(data = filtered_data, 
+             aes_string(x = proteome_logFC_col, y = rpf_logFC_col), 
+             color = "gray", size = 1, alpha=0.5) +
+  #Upregulated proteins
+  geom_point(data = filtered_data %>% 
+               filter((!!sym(rpf_logFC_col) > 0.26 | !!sym(rpf_logFC_col) < -0.26) & 
+                      !!sym(rpf_pValue_col) < 0.01 & 
+                      (!!sym(proteome_logFC_col) > 0.26) & 
+                      !!sym(proteome_pValue_col) < 0.01), 
+             aes(x = !!sym(proteome_logFC_col), y = !!sym(rpf_logFC_col)), 
+             fill = "darkred", size = 3, shape = 21) +
+  
+  geom_text_repel(data = filtered_data %>% 
+                   filter((!!sym(rpf_logFC_col) > 0.26 | !!sym(rpf_logFC_col) < -0.26) & 
+                      !!sym(rpf_pValue_col) < 0.01 & 
+                      (!!sym(proteome_logFC_col) > 0.26) & 
+                      !!sym(proteome_pValue_col) < 0.01), 
+                  aes_string(x = proteome_logFC_col, y = rpf_logFC_col, label = "Gene"), 
+                  size = 3, color = "darkred", max.overlaps = 5) +
+   
+   #Downregulated proteins
+  geom_point(data = filtered_data %>% 
+               filter((!!sym(rpf_logFC_col) > 0.26 | !!sym(rpf_logFC_col) < -0.26) & 
+                      !!sym(rpf_pValue_col) < 0.01 & 
+                      (!!sym(proteome_logFC_col) < -0.26) & 
+                      !!sym(proteome_pValue_col) < 0.01), 
+             aes_string(x = proteome_logFC_col, y = rpf_logFC_col), 
+             fill = "blue", size = 3, shape = 21) +
+  
+  geom_text_repel(data = filtered_data %>% 
+                   filter((!!sym(rpf_logFC_col) > 0.26 | !!sym(rpf_logFC_col) < -0.26) & 
+                      !!sym(rpf_pValue_col) < 0.01 & 
+                      (!!sym(proteome_logFC_col) < -0.26) & 
+                      !!sym(proteome_pValue_col) < 0.01), 
+                  aes_string(x = proteome_logFC_col, y = rpf_logFC_col, label = "Gene"), 
+                  size = 3, color = "darkblue", max.overlaps = 15) +
+  labs(x = "Proteome (log2FC)", y = "Ribo-seq (log2FC)", 
+       title = paste("Ribo-seq vs Proteome ", condition)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+ theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.background = element_rect(fill = "transparent", colour = NA),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_blank())
+
+}
+
+plots_Leu <- plot_condition("Leu")
+plots_Ile <- plot_condition("Ile")
+plots_Val <- plot_condition("Val")
+plots_Double <- plot_condition("Double")
+plots_Triple <- plot_condition("Triple")
+
+ggsave(filename = "../Figures/Proteome_vs_RPF_Leu.tiff",plot = plots_Leu, width = 4,height = 3,dpi = 300)
+ggsave(filename = "../Figures/Proteome_vs_RPF_Ile.tiff",plot = plots_Ile, width = 4,height = 3,dpi = 300)
+ggsave(filename = "../Figures/Proteome_vs_RPF_Val.tiff",plot = plots_Val, width = 4,height = 3,dpi = 300)
+ggsave(filename = "../Figures/Proteome_vs_RPF_Double.tiff",plot = plots_Double, width = 4,height = 3,dpi = 300)
+ggsave(filename = "../Figures/Proteome_vs_RPF_Triple.tiff",plot = plots_Triple, width = 4,height = 3,dpi = 300)
+```
+
+
+
+
+
+```{r}
+  proteome_logFC_col <- paste0("Proteome_", "Val", "_logFC")
+  proteome_pValue_col <- paste0("Proteome_","Val", "_PValue")
+  te_logFC_col <- paste0("TE_", "Val", "_logFC")
+  rpf_logFC_col <- paste0("RPF_", "Val", "_logFC")
+  rpf_pValue_col <- paste0("RPF_", "Val", "_PValue")
+  rna_logFC_col <- paste0("RNA_", "Val", "_logFC") 
+
+
+
+
+
+Proteome_vs_RPF <- ggplot(filtered_data, aes_string(x = proteome_logFC_col, y = rpf_logFC_col)) +
+    geom_point(data = filtered_data, 
+             aes_string(x = proteome_logFC_col, y = rpf_logFC_col), 
+             color = "gray", size = 1, alpha=0.5) +
+  #Upregulated proteins
+  geom_point(data = filtered_data %>% 
+               filter((!!sym(rpf_logFC_col) > 0.26 | !!sym(rpf_logFC_col) < -0.26) & 
+                      !!sym(rpf_pValue_col) < 0.01 & 
+                      (!!sym(proteome_logFC_col) > 0.26) & 
+                      !!sym(proteome_pValue_col) < 0.01), 
+             aes_string(x = proteome_logFC_col, y = rpf_logFC_col), 
+             fill = "darkred", size = 3, shape = 21) +
+  
+  geom_text_repel(data = filtered_data %>% 
+                   filter((!!sym(rpf_logFC_col) > 0.26 | !!sym(rpf_logFC_col) < -0.26) & 
+                      !!sym(rpf_pValue_col) < 0.01 & 
+                      (!!sym(proteome_logFC_col) > 0.26) & 
+                      !!sym(proteome_pValue_col) < 0.01), 
+                  aes_string(x = proteome_logFC_col, y = rpf_logFC_col, label = "Gene"), 
+                  size = 3, color = "darkred", max.overlaps = 5) +
+   
+   #Downregulated proteins
+  geom_point(data = filtered_data %>% 
+               filter((!!sym(rpf_logFC_col) > 0.26 | !!sym(rpf_logFC_col) < -0.26) & 
+                      !!sym(rpf_pValue_col) < 0.01 & 
+                      (!!sym(proteome_logFC_col) < -0.26) & 
+                      !!sym(proteome_pValue_col) < 0.01), 
+             aes_string(x = proteome_logFC_col, y = rpf_logFC_col), 
+             fill = "darkblue", size = 3, shape = 21) +
+  
+  geom_text_repel(data = filtered_data %>% 
+                   filter((!!sym(rpf_logFC_col) > 0.26 | !!sym(rpf_logFC_col) < -0.26) & 
+                      !!sym(rpf_pValue_col) < 0.01 & 
+                      (!!sym(proteome_logFC_col) <- 0.26) & 
+                      !!sym(proteome_pValue_col) < 0.01), 
+                  aes_string(x = proteome_logFC_col, y = rpf_logFC_col, label = "Gene"), 
+                  size = 3, color = "darkblue", max.overlaps = 5) + 
+   
+  labs(x = "Proteome logFC", y = "Riboseq logFC", 
+       title = paste("Proteome logFC vs Riboseq logFC for")) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+ theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.background = element_rect(fill = "transparent", colour = NA),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_blank())
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Heatmap
+```{r}
+selected_proteins <- Proteome %>%
+  filter(Gene %in% filtered_proteins$Gene) %>%
+  as.data.frame()
+row.names(selected_proteins) <- selected_proteins$Gene
+
+intensity_data <- selected_proteins %>%
+  select(starts_with("Proteome") & ends_with("logFC"))
+
+k <-10
+set.seed(1234)
+kmeans_result <- kmeans(intensity_data, centers = k)
+
+intensity_data <- intensity_data %>%
+  mutate(
+    cluster = kmeans_result$cluster,
+    Gene = rownames(intensity_data)
+  )
+
+heatmap_data_long <- intensity_data %>%
+  pivot_longer(
+    cols = starts_with("Proteome") & ends_with("logFC"),
+    names_to = "Condition",
+    values_to = "log2FC"
+  ) %>%
+  mutate(
+    Condition = factor(gsub("Proteome_|_logFC", "", Condition), levels = c("Leu", "Ile", "Val", "Double", "Triple")),
+    cluster = factor(cluster, levels = sort(unique(cluster)))
+  ) %>%
+  arrange(cluster)
+
+heatmap_data_long <- heatmap_data_long %>%
+  arrange(cluster, Gene) %>%
+  mutate(Gene = factor(Gene, levels = unique(Gene)))
+
+heat_Proteome <- ggplot(heatmap_data_long, aes(x = Condition, y = Gene, fill = log2FC)) +
+  geom_tile(width = 1) +
+  scale_fill_gradientn(colors = colorRampPalette(c("darkblue", "white", "darkred"))(100), 
+                       limits = c(-1.5, 1.5)) +
+  theme_classic() +
+  theme(
+    text = element_text(family = "Arial", size = 16, color = "black"),  # Set text properties
+    axis.text.y = element_blank(),  # Remove gene names from y-axis
+    axis.text.x = element_text(size = 14, color = "black", angle = 90, hjust = 1, vjust = 0.5),  # Rotate x-axis text
+    axis.ticks = element_blank(),  # Remove axis ticks
+    axis.line = element_blank(),  # Remove axis lines
+    axis.title = element_blank(),  # Remove axis titles
+    legend.text = element_text(size = 14),  # Legend text size
+    legend.title = element_blank(),  # Remove legend title
+    plot.margin = unit(c(0, 0, 0, 0), "cm")  # Remove plot margins
+  ) 
+
+heat_Proteome
+
+save(heat_Proteome, file="../3. Proteome/Plots/Heatmap_downregulated_proteins.RData")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Go terms
+```{r}
+library(enrichR)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+
+dbs <- listEnrichrDbs()
+dbb <- dbs$libraryName[grep('GO_.+2023|KEGG_2019.+Mouse', dbs$libraryName)]
+
+GO_up <- enrichr(filtered_proteins_up$Gene, databases = dbb)
+GO_down <- enrichr(filtered_proteins_down$Gene, databases = dbb)
+
+# Function to create plots for GO and KEGG terms
+create_plots <- function(GO_data, title_suffix) {
+  suffixes <- c("Molecular_Function_2023", "Biological_Process_2023", "Cellular_Component_2023", "KEGG_2019_Mouse")
+  plot_list <- list()
+  
+  for (suffix in suffixes) {
+    dataset_name <- paste("GO", suffix, sep="_")
+    if (!is.null(GO_data[[dataset_name]])) {
+      data <- GO_data[[dataset_name]] %>%
+        dplyr::filter(Adjusted.P.value < 0.05 & Combined.Score > 10) %>%
+        dplyr::arrange(Adjusted.P.value) %>%
+        head(10)
+      
+      plot <- ggplot(data, aes(x = reorder(Term, -Combined.Score), y = Combined.Score)) + 
+        geom_col() +
+        coord_flip() +  
+        labs(x = "Term", y = "Combined Score", title = paste("GO:", suffix, title_suffix)) +
+        theme_classic()
+      
+      plot_list[[suffix]] <- plot
+    } else {
+      print(paste("No data available for", dataset_name, "in", title_suffix, "dataset"))
+    }
+  }
+  
+  return(plot_list)
+}
+
+# Generate plots for all categories
+
+plots_up <- create_plots(GO_up, "Up")
+plots_down <- create_plots(GO_down, "Down")
+
+
+# Display or save plots as needed
+grid.arrange(grobs = c(plots_up, plots_down), ncol = 4)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(ggrepel)
+
+create_volcano_plot <- function(data, col_prefix, title) {
+  data <- data %>%
+    mutate(
+      Log2FC = get(paste0(col_prefix, "_mean")),
+      MinusLog10P = -log10(get(paste0("p.adj_", col_prefix, "_Ctrl"))),
+      Type = case_when(
+        get(paste0("p.adj_", col_prefix, "_Ctrl")) < 0.05 & get(paste0(col_prefix, "_mean")) > 0.26 ~ "up",
+        get(paste0("p.adj_", col_prefix, "_Ctrl")) < 0.05 & get(paste0(col_prefix, "_mean")) < -0.26 ~ "down",
+        TRUE ~ "N.S."
+      )
+    )
+  
+  # Define the colors and shapes for the significant and non-significant points
+  up_color <- "#B2182B"
+  up_shape <- 19
+  down_color <- "#2166AC"
+  down_shape <- 19
+  ns_color <- "gray19"
+  ns_shape <- 21
+  point_size <- 3
+  ns_size <- 1
+
+  y_axis_limit <- c(0, max(data$MinusLog10P + 1))
+
+ annotate_proteins <- data %>%
+  filter(get(paste0("p.adj_", col_prefix, "_Ctrl")) < 0.05 & Log2FC > 0.26 | get(paste0("p.adj_", col_prefix, "_Ctrl")) < 0.05 & Log2FC < -0.26)
+ 
+  # Calculate the counts of genes meeting specific criteria
+  up_count <- sum(data$Type == "up")
+  down_count <- sum(data$Type == "down")
+
+  # Plot the data
+  plot <- ggplot(data, aes(x = Log2FC, y = MinusLog10P, color = Type, shape = Type)) +
+    geom_point(aes(color = Type, shape = Type, fill = Type), size = 3, alpha = 0.3) +
+    scale_color_manual(values = c("N.S." = ns_color, "up" = up_color, "down" = down_color), guide = guide_legend(title = paste("Type_", col_prefix))) +
+    scale_shape_manual(values = c("N.S." = ns_shape, "up" = up_shape, "down" = down_shape), guide = guide_legend(title = paste("Type_", col_prefix))) +
+    scale_fill_manual(values = c("N.S." = ns_color, "up" = up_color, "down" = down_color), guide = guide_legend(title = paste("Type_", col_prefix))) +
+    theme_minimal() +
+     labs(title = paste(title),
+         x = expression(Log[2]*FC),
+         y = expression("-" * Log[10] * " P value")) +
+    theme(plot.title = element_text(hjust = 0.5, size = 18),
+          axis.title = element_text(size = 14, face = "bold"),
+          axis.text = element_text(size = 12, color = "black"),
+          legend.position = "none",
+          legend.title = element_blank(),
+          legend.text = element_text(size = 12),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(),
+          axis.line = element_line(color = "black"),
+          axis.ticks = element_line(color = "black") ) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+   lims(x = c(-2, 1.5), y = y_axis_limit) +
+    geom_text(x = 0, y = max(data$MinusLog10P),
+              label = paste("Up (n =", up_count, ")"), hjust = -0.2, vjust = -3, size = 3, color = "#B2182B") +
+    geom_text(x = 0, y = max(data$MinusLog10P),
+              label = paste("Down (n =", down_count, ")"), hjust = 1.1, vjust = -3, size = 3, color = "#2166AC")+
+    geom_text_repel(data = annotate_proteins,
+                  aes(x = Log2FC, y = MinusLog10P, label = Gene.Symbol),
+                  box.padding = 0.2, point.padding = 0.2,
+                  segment.color = "black", segment.size = 0.2,
+                  color = "black", size = 2.5, force = 5)
+
+  print(plot)
+}
+
+# Usage:
+Leu_vulcano <- create_volcano_plot(Proteome, "Leu", "Leu vs. Ctrl")
+Ile_vulcano <- create_volcano_plot(Proteome, "Ile", "Ile vs. Ctrl")
+Val_vulcano <- create_volcano_plot(Proteome, "Val", "Val vs. Ctrl")
+Double_vulcano <- create_volcano_plot(Proteome, "Double", "Double vs. Ctrl")
+Triple_vulcano <- create_volcano_plot(Proteome, "Triple", "Triple vs. Ctrl")
+
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Vulcano Plots/Leu.png", Leu_vulcano, width = 3, height = 4)
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Vulcano Plots/Ile.png", Ile_vulcano, width = 3, height = 4)
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Vulcano Plots/Val.png", Val_vulcano, width = 3, height = 4)
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Vulcano Plots/Triple.png", Triple_vulcano, width = 3, height = 4)
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Vulcano Plots/Double.png", Double_vulcano, width = 3, height = 4)
+```
+
+
+
+
+##Overlap with UpsetR
+```{r}
+library(UpSetR)
+
+UpsetR_plot <- function(data_up, data_down, output_dir) {
+  conditions <- c("Leu", "Ile", "Val", "Triple", "Double")
+  list_up <- list()
+  list_down <- list()
+  list_all <- list()
+  
+  for (cond in conditions) {
+    list_up[[cond]] <- data_up[[cond]]$Gene.Symbol
+    list_down[[cond]] <- data_down[[cond]]$Gene.Symbol
+    list_all[[cond]] <- union(data_up[[cond]]$Gene.Symbol, data_down[[cond]]$Gene.Symbol)
+  }
+  plot_lists <- function(lists, plot_name) {
+    plot <- upset(fromList(lists), main.bar.color = "black", sets.bar.color = "gray", order.by = "freq", text.scale = 1.5, nsets = 5, nintersects = 15)
+    png(paste0(output_dir, "/", plot_name, ".png"), width = 7, height = 4, units = "in", res = 300)
+    print(plot)
+    dev.off()
+  }
+  
+  plot_lists(list_up, "Upregulated_Genes")
+  plot_lists(list_down, "Downregulated_Genes")
+  plot_lists(list_all, "All_Significant_Genes")
+}
+
+output_directory <- "C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Vulcano Plots"
+data_up <- list(Val = Val_Up, Leu = Leu_Up, Ile = Ile_Up, Triple=Triple_Up, Double=Double_Up)
+data_down <- list(Val = Val_Down, Leu = Leu_Down, Ile = Ile_Down, Triple=Triple_Down, Double=Double_Down)
+UpsetR_plot(data_up, data_down, output_directory)
+
+```
+
+
+
+
+
+### Differences between starvation conditions
+
+```{r}
+# All Conditions
+
+IlevsVal <- Proteome %>% filter(p_aov < 0.01) %>% filter(p.adj_Val_Ile < 0.05 & (log2(Average_Ile/Average_Val) < -0.26 | log2(Average_Ile/Average_Val) > 0.26) & ((Ile_mean > -0 & Val_mean < 0)|(Ile_mean < 0 & Val_mean > 0))) %>% select(Gene.Symbol)
+LeuvsVal <- Proteome %>% filter(p_aov < 0.01) %>% filter(p.adj_Val_Leu < 0.05 & (log2(Average_Leu/Average_Val) < -0.26 | log2(Average_Leu/Average_Val) > 0.26)& ((Leu_mean > -0 & Val_mean < 0)|(Leu_mean < 0 & Val_mean > 0))) %>% select(Gene.Symbol)
+LeuvsIle <- Proteome %>% filter(p_aov < 0.01) %>% filter(p.adj_Leu_Ile < 0.05 & (log2(Average_Leu/Average_Ile) < -0.26 | log2(Average_Leu/Average_Ile) > 0.26)& ((Leu_mean > -0 & Ile_mean < 0)|(Leu_mean < 0 & Ile_mean > 0))) %>% select(Gene.Symbol)
+
+ValvsTriple <- Proteome %>% filter(p_aov < 0.01) %>% filter(p.adj_Val_Triple < 0.05 & (log2(Average_Val/Average_Triple) < -0.26 | log2(Average_Val/Average_Triple) > 0.26)& ((Val_mean > -0 & Triple_mean < 0)|(Val_mean < 0 & Triple_mean > 0))) %>% select(Gene.Symbol)
+TriplevsLeu <- Proteome %>% filter(p_aov < 0.01) %>% filter(p.adj_Triple_Leu < 0.05 & (log2(Average_Leu/Average_Triple) < -0.26 | log2(Average_Leu/Average_Triple) > 0.26)& ((Triple_mean > -0 & Leu_mean < 0)|(Triple_mean < 0 & Leu_mean > 0))) %>% select(Gene.Symbol)
+TriplevsIle <- Proteome %>% filter(p_aov < 0.01) %>% filter(p.adj_Triple_Ile < 0.05 & (log2(Average_Ile/Average_Triple) < -0.26 | log2(Average_Ile/Average_Triple) > 0.26)& ((Triple_mean > -0 & Ile_mean < 0)|(Triple_mean < 0 & Ile_mean > 0))) %>% select(Gene.Symbol)
+
+DoublevsLeu <- Proteome %>% filter(p_aov < 0.01) %>% filter(p.adj_Leu_Double < 0.05 & (log2(Average_Leu/Average_Double) < -0.26 | log2(Average_Leu/Average_Double) > 0.26)& ((Double_mean > -0 & Leu_mean < 0)|(Double_mean < 0 & Leu_mean > 0))) %>% select(Gene.Symbol)
+DoublevsIle <- Proteome %>% filter(p_aov < 0.01) %>% filter(p.adj_Ile_Double < 0.05 & (log2(Average_Ile/Average_Double) < -0.26 | log2(Average_Ile/Average_Double) > 0.26)& ((Double_mean > -0 & Ile_mean < 0)|(Double_mean < 0 & Ile_mean > 0))) %>% select(Gene.Symbol)
+DoublevsVal <- Proteome %>% filter(p_aov < 0.01) %>% filter(p.adj_Val_Double < 0.05 & (log2(Average_Val/Average_Double) < -0.26 | log2(Average_Val/Average_Double) > 0.26)& ((Double_mean > -0 & Val_mean < 0)|(Double_mean < 0 & Val_mean > 0))) %>% select(Gene.Symbol)
+DoublevsTriple <- Proteome %>% filter(p_aov < 0.01) %>% filter(p.adj_Triple_Double < 0.05 & (log2(Average_Triple/Average_Double) < -0.26 | log2(Average_Triple/Average_Double) > 0.26)& ((Double_mean > -0 & Triple_mean < 0)|(Double_mean < 0 & Triple_mean > 0))) %>% select(Gene.Symbol)
+
+filtered_proteins <- rbind(IlevsVal, LeuvsVal, LeuvsIle, ValvsTriple, TriplevsLeu, TriplevsIle, DoublevsTriple, DoublevsVal, DoublevsIle, DoublevsLeu)
+
+```
+
+```{r}
+library(ggplot2)
+Proteome_filter <- Proteome %>% filter(p_aov < 0.01)
+
+create_plot <- function(data, x_var, y_var, subset_df, title, x_lab, y_lab) {
+data$Highlight <- ifelse(data$Gene.Symbol %in% subset_df$Gene.Symbol, "Yes", "No")
+  
+  ggplot(data, aes_string(x = x_var, y = y_var)) +
+    geom_point(aes(fill = Highlight, color = Highlight, shape = Highlight, size = Highlight), alpha=0.5) +
+    scale_fill_manual(values = c("Yes" = "red", "No" = "lightgrey")) +
+    scale_color_manual(values = c("Yes" = "black", "No" = "lightgrey")) +
+    scale_shape_manual(values = c("Yes" = 21, "No" = 18)) +
+    scale_size_manual(values = c("Yes" = 4, "No" = 3)) +
+    labs(title = title, x = x_lab, y = y_lab) +
+    theme_classic() +
+    theme(
+      #plot.title = element_text(hjust = 0.5, size = 12),
+          axis.title = element_text(size = 16),
+          axis.text.x = element_text(size = 16),  
+          axis.text.y = element_text(size = 16), 
+          legend.position = "none",  # Disable the legend
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(),
+          axis.line = element_line(color = "black"),
+          axis.ticks = element_line(color = "black")) +
+    geom_abline(slope = 1, color = "black") +
+   # xlim(c(-1.5, 2)) +
+  #  ylim(c(-1.5, 2))+
+    geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") 
+}
+
+a <- create_plot(Proteome_filter, "Val_mean", "Ile_mean", IlevsVal, "Ile vs. Val", "Val vs. Ctrl [log2FC]", "Ile vs. Ctrl [log2FC]")
+b <- create_plot(Proteome_filter, "Val_mean", "Leu_mean", LeuvsVal, "Leu vs. Val", "Val vs. Ctrl [log2FC]", "Leu vs. Ctrl [log2FC]")
+c <- create_plot(Proteome_filter, "Leu_mean", "Ile_mean", LeuvsIle, "Leu vs. Ile", "Leu vs. Ctrl [log2FC]", "Ile vs. Ctrl [log2FC]")
+d <- create_plot(Proteome_filter, "Triple_mean", "Leu_mean", TriplevsLeu, "Triple vs. Leu", "Triple vs. Ctrl [log2FC]", "Leu vs. Ctrl [log2FC]")
+e <- create_plot(Proteome_filter, "Triple_mean", "Ile_mean", TriplevsIle, "Triple vs. Ile", "Triple vs. Ctrl [log2FC]", "Ile vs. Ctrl [log2FC]")
+f <- create_plot(Proteome_filter, "Triple_mean", "Val_mean", ValvsTriple, "Triple vs. Val", "Triple vs. Ctrl [log2FC]", "Val vs. Ctrl [log2FC]")
+
+g <- create_plot(Proteome_filter, "Triple_mean", "Double_mean", DoublevsTriple, "Triple vs. Double", "Triple vs. Ctrl [log2FC]", "Double vs. Ctrl [log2FC]")
+h <- create_plot(Proteome_filter, "Leu_mean", "Double_mean", DoublevsLeu, "Leu vs. Double", "Leu vs. Ctrl [log2FC]", "Double vs. Ctrl [log2FC]")
+i <- create_plot(Proteome_filter, "Ile_mean", "Double_mean", DoublevsIle, "Ile vs. Double", "Ile vs. Ctrl [log2FC]", "Double vs. Ctrl [log2FC]")
+j <- create_plot(Proteome_filter, "Val_mean", "Double_mean", DoublevsVal, "Val vs. Double", "Val vs. Ctrl [log2FC]", "Double vs. Ctrl [log2FC]")
+
+library(gridExtra)
+png("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Vulcano Plots/Scatter_differences.png", width = 2000, height = 1000, res = 150)
+grid.arrange(a, b, j, f, d, 
+             c,h, i, g ,e,
+             nrow = 2, ncol = 5)
+dev.off() 
+```
+
+
+```{r}
+library(pheatmap)
+
+selected_proteins <- Proteome_filter[Proteome_filter$Gene.Symbol %in% filtered_proteins$Gene.Symbol, ]
+selected_proteins <- as.data.frame(selected_proteins)
+row.names(selected_proteins) <- selected_proteins$Gene.Symbol
+
+intensity_columns <- grep("_mean$", names(selected_proteins))
+intensity_data <- selected_proteins[, intensity_columns]
+intensity_data <- intensity_data %>%
+  select(- Ctrl_mean)
+
+
+k <- 4 # Set the number of clusters
+set.seed(1234)
+
+dataMatrix <- as.matrix(intensity_data)
+kmeans_result <- kmeans(intensity_data, centers = k)
+intensity_data$cluster <- kmeans_result$cluster
+order_dat <- data.frame(cluster = intensity_data$cluster, row.names = rownames(intensity_data))
+order_index <- order(order_dat$cluster)
+ordered_dataMatrix <- dataMatrix[order_index,]
+annotation_row <- order_dat[order_index,, drop = FALSE]
+
+png("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Vulcano Plots/Heatmap.png", width = 600, height = 900, res = 150)
+par(cex = 0.75)
+Heatmap_up <- pheatmap(ordered_dataMatrix, 
+                    cluster_rows = F,
+                #    annotation_row = order_dat, 
+                   color = colorRampPalette(c("darkblue", "white", "brown"))(100),
+                    main = "Downregulated",
+                    legend = TRUE,
+                 #  show_rownames = TRUE,
+                   cellwidth = 15,
+          breaks = seq(-0.8, 0.8, length.out = 101))
+dev.off() 
+Heatmap_up
+
+
+
+
+```
+
+```{r}
+library(ggplot2)
+
+selected_genes <- c("Cdkn1a", "Cdk4", "Mdm2", "Mocs3", "Osgep", "Rbm15b") 
+filtered_data <- selected_proteins[selected_proteins$Gene.Symbol %in% selected_genes, ]
+
+plot <- ggplot(filtered_data, aes(x = Gene.Symbol)) +
+  geom_point(aes(y = Leu_mean, fill = "Leu"), size = 3, alpha = 0.7, shape=21) +
+  geom_point(aes(y = Ile_mean, fill = "Ile"), size = 3, alpha = 0.7, shape=21) +
+  geom_point(aes(y = Val_mean, fill = "Val"), size = 3, alpha = 0.7, shape=21) +
+   geom_point(aes(y = Double_mean, fill = "Double"), size = 3, alpha = 0.7, shape=21) +
+  geom_point(aes(y = Triple_mean, fill = "Triple"), size = 3, alpha = 0.7, shape=21) +
+  scale_fill_manual(values = c("Leu" = "purple", "Ile" = "green4", "Val" = "yellow", "Triple" = "orange", "Double"="skyblue")) +
+  labs(x = "Protein", y = "Fold change [log2]", color = "Condition") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  theme_classic() +
+  theme(legend.position = "top",
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 14),
+        axis.title = element_text(size = 14, color = "black"), 
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 12, color = "black"),
+        axis.text.y = element_text(size = 12, color = "black"),
+        legend.text = element_text(size = 12))
+
+ggsave("C:/Users/worpenbe/Desktop/EPFL/Projects/Proteome upon starvation/Results/Analysis/Figures/Vulcano Plots/Examples from diff_heatmap.png", plot = plot, width = 5, height = 3, units = "in")
+```
+
+```
+
+

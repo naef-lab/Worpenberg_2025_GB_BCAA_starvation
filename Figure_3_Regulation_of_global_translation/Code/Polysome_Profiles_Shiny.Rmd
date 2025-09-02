@@ -1,0 +1,452 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+```{r}
+library(shiny)
+library(plotly)
+library(readxl)
+library(DT)
+library(tidyr)
+
+data <- read_excel("../Data/Polysome profiles_raw data & summary/Profiles.xlsx")
+
+smooth_data <- function(df, column_names) {
+    for (col in column_names) {
+        non_na_values <- !is.na(df[[col]])  
+        if (sum(non_na_values) > 0) { 
+            smoothed_values <- stats::filter(df[[col]][non_na_values], rep(1/3, 3), sides=2)
+            df[[col]][non_na_values] <- smoothed_values}}
+    return(df)}
+
+smoothed_data <- smooth_data(data, colnames(data)[2:ncol(data)])
+
+ui <- fluidPage(
+  titlePanel("Interactive Data Selection"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("sampleSelect", "Choose a sample:", choices = colnames(smoothed_data)[-1]),  # Excluding the Time column
+      textInput("labels", "Enter labels separated by commas", "start, 60S, 80S, PS_start, end"),
+      actionButton("initializePoints", "Initialize Points for New Sample"),
+      actionButton("stopApp", "Stop and Save Data")), mainPanel(
+      plotlyOutput("plot"), DTOutput("dataTable"))))
+
+server <- function(input, output, session) {
+  points <- reactiveValues(clicked = data.frame(Time = numeric(), Value = numeric(), Sample = character(), Label = character(), stringsAsFactors = FALSE))
+
+  observeEvent(input$initializePoints, {
+    predefined_labels <- strsplit(input$labels, ",\\s*")[[1]]
+    new_points <- data.frame(Time = rep(NA, length(predefined_labels)), 
+                             Value = rep(NA, length(predefined_labels)),
+                             Sample = rep(input$sampleSelect, length(predefined_labels)), 
+                             Label = predefined_labels, 
+                             stringsAsFactors = FALSE)
+    if(!any(points$clicked$Sample == input$sampleSelect)) {
+      points$clicked <- rbind(points$clicked, new_points)
+    }
+  })
+
+  output$plot <- renderPlotly({
+    req(smoothed_data)
+    plot_ly(smoothed_data, x = ~Time, y = as.formula(paste0("~`", input$sampleSelect, "`")), name = input$sampleSelect, type = 'scatter', mode = 'lines+markers') %>%
+      layout(title = "Interactive Plot: Click on a point to select it")
+  })
+
+  observeEvent(event_data("plotly_click"), {
+    click_info <- event_data("plotly_click")
+    if (!is.null(click_info)) {
+      empty_indices <- which(is.na(points$clicked$Time) & points$clicked$Sample == input$sampleSelect)
+      if (length(empty_indices) > 0) {
+        points$clicked[empty_indices[1], c("Time", "Value")] <- c(click_info$x, click_info$y)
+      }
+    }
+  })
+
+  output$dataTable <- renderDT({
+    datatable(points$clicked[points$clicked$Sample == input$sampleSelect, ], editable = TRUE)
+  }, server = FALSE)
+
+  observeEvent(input$stopApp, {
+    SelectedPoints <<- points$clicked
+    stopApp()
+  })
+}
+
+shinyApp(ui, server)
+
+Points <- SelectedPoints %>%
+  select(-Value) %>%
+  pivot_wider(names_from = Sample, values_from = Time)
+
+save(Points, file = "../Data/Polysome profiles_raw data & summary/Points.Rdata")
+save(smoothed_data, file = "../Data/Polysome profiles_raw data & summary/smoothed_data.Rdata")
+```
+
+```{r}
+library(tidyr)
+library(ggplot2)
+
+load(file = "../Data/Polysome profiles_raw data & summary/Points.Rdata")
+load(file = "../Data/Polysome profiles_raw data & summary/smoothed_data.Rdata")
+
+### Process data: Filter and normalize data frame
+new_df <- smoothed_data %>%
+  mutate(across(setdiff(names(smoothed_data), "Time"), ~ifelse(Time >= min(Points[[cur_column()]]), 
+ifelse(Time <= max(Points[[cur_column()]]), ., NA), NA)))
+
+### Curve Shifting:
+shift_curves <- function(points_df, new_df, reference_label) {
+  reference_row <- points_df %>% filter(Label == reference_label)
+  for (col in names(reference_row)[2:ncol(reference_row)]) {
+    ref_time <- reference_row[[col]]
+    min_val <- new_df %>%
+      filter(Time == ref_time)%>%
+      select(col)
+    new_df[[col]] <- new_df[[col]] - min_val[[col]]
+  }
+  return(new_df)
+}
+
+new_df <- shift_curves(Points, new_df, "PS_start")
+
+#### Interpolate
+long_data_normalized <- pivot_longer(new_df, cols = -Time, names_to = "Sample", values_to = "Intensity")
+corrected_data <- data.frame()
+
+for (col_name in names(Points)[-1]) {
+    sample.x.anchor = Points[[col_name]]
+    ref.x.anchor <- Points[[2]]
+    sample_data <- long_data_normalized %>%
+        filter(Sample == col_name)
+    sample.x.corrected <- approx(sample.x.anchor, ref.x.anchor, xout = sample_data$Time, rule = 2)$y
+    corrected_sample_data <- data.frame(Time_corrected = sample.x.corrected, 
+                                        Intensity = sample_data$Intensity, 
+                                        Sample = col_name)
+    corrected_data <- rbind(corrected_data, corrected_sample_data)}
+
+aggregated_data <- corrected_data %>%
+  group_by(Time_corrected, Sample) %>%
+  summarize(Intensity = mean(Intensity, na.rm = TRUE)) %>%
+  ungroup()
+
+corrected_data <- aggregated_data %>%
+  spread(key = Sample, value = Intensity)
+
+
+## Normalization of each sample to total area under the curve:
+normalize_to_auc <- function(df) {
+  if (!is.numeric(df$Time_corrected)) {
+    stop("Time column must be numeric")
+  }
+
+  for (col in names(df)[2:ncol(df)]) {
+    if (!is.numeric(df[[col]])) {
+      next  # Skip non-numeric columns
+    }
+
+    valid_rows <- !is.na(df[[col]])
+    if (sum(valid_rows) > 1) {
+      time_diffs <- diff(df$Time_corrected[valid_rows])
+      area <- sum(df[valid_rows, col] * time_diffs, na.rm = TRUE)
+      
+      # Check if area is zero or very small
+      if (area < .Machine$double.eps) {
+        warning(paste("Very small or zero area for column:", col))
+        df[[col]][valid_rows] <- NA
+      } else {
+        df[[col]][valid_rows] <- df[[col]][valid_rows] / area
+      }
+    } else {
+      df[[col]] <- NA  # Set entire column to NA if not enough valid data
+    }
+  }
+  return(df)
+}
+
+data_normalized <- normalize_to_auc(corrected_data)
+
+long_data_normalized <- pivot_longer(data_normalized, 
+                                     cols = -Time_corrected, 
+                                     names_to = "Sample", 
+                                     values_to = "Intensity") %>%
+                                     drop_na(Intensity)
+
+# Plotting
+library(plotly)
+
+combined_plot_all <- ggplot(long_data_normalized, aes(x = Time_corrected, y = Intensity, color = Sample)) +
+    geom_line(size=1.5) +
+    theme_classic() +
+    labs(title = "Combined Adjusted Profiles", 
+         x = "Corrected Time", 
+         y = "Relative absorbtion [a.u.]") +
+    scale_color_discrete(name = "Sample")
+
+plotly_plot_all <- ggplotly(combined_plot_all)
+plotly_plot_all
+
+```
+
+
+## Create individual graphs
+```{r}
+original_data <- long_data_normalized
+
+ctrl_data <- original_data %>%
+  filter(Sample == "Ctrl_1") %>%
+  slice(rep(1:n(), times = 5)) %>%
+  mutate(Group = rep(c("-Ile", "-Leu", "-Val", "Double", "Triple"), each = n() / 5))
+
+comparison_data <- original_data %>%
+  filter(Sample != "Ctrl_1") %>%
+  mutate(Group = case_when(
+    Sample == "Ile_1" ~ "-Ile",
+    Sample == "Leu_1" ~ "-Leu",
+    Sample == "Val_1" ~ "-Val",
+    Sample == "Double_1" ~ "Double",
+    Sample == "Triple_1" ~ "Triple"
+  ))
+
+combined_data <- bind_rows(ctrl_data, comparison_data)%>%
+  drop_na()
+combined_data$Group <- factor(combined_data$Group, 
+                              levels = c("-Leu", "-Ile", 
+                                         "-Val", "Double", 
+                                         "Triple"))
+
+polysome_profiles <- ggplot(combined_data, aes(x = Time_corrected, y = Intensity, 
+                                               color = Sample, group = Sample, 
+                                               alpha = Sample)) +  # Map alpha dynamically
+  geom_line(size = 1.2) +  
+  labs(x = "adj. elution time", y = "Relative A254") +
+  theme_classic(base_family = "Arial") +
+  coord_cartesian(ylim = c(NA, 2.3)) +
+  
+  # Define colors manually
+  scale_color_manual(values = c("Ctrl_1" = "black", 
+                                "Ile_1" = "orange", 
+                                "Leu_1" = "orange", 
+                                "Val_1" = "orange", 
+                                "Double_1" = "orange", 
+                                "Triple_1" = "orange")) +
+
+  # Define different alpha values for control and starvation
+  scale_alpha_manual(values = c("Ctrl_1" = 1,  # Fully visible
+                                "Ile_1" = 0.6, 
+                                "Leu_1" = 0.6, 
+                                "Val_1" = 0.6, 
+                                "Double_1" = 0.6, 
+                                "Triple_1" = 0.6)) +
+
+  theme(
+    text = element_text(family = "Arial", size = 14, color = "black"),
+    axis.line = element_line(color = "black"),
+    axis.text = element_text(family = "Arial", size = 14, color = "black"),
+    axis.title = element_text(family = "Arial", size = 14, color = "black"),
+    legend.position = "none",
+    plot.title = element_blank()
+  ) +
+  
+  facet_wrap(~ Group, ncol = 5)
+
+polysome_profiles
+
+legend_data <- data.frame(Sample = c("Ctrl", "Starvation"),x = c(1, 2), y = c(1, 1))
+custom_legend <- ggplot(legend_data, aes(x = x, y = y, color = Sample)) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("Ctrl" = "black", "Starvation" = "orange")) +
+  theme_void() +
+  theme(legend.position = "top", legend.text = element_text(family = "Arial", size = 14), legend.title = element_blank())
+
+library(cowplot)
+
+polysome_profiles_with_legend <- plot_grid(
+  custom_legend, 
+  polysome_profiles, 
+  ncol = 1,
+  rel_heights = c(0.1, 1))
+
+polysome_profiles_with_legend
+
+save(polysome_profiles_with_legend, file = "../Figures/Plots_profiles.RData")
+ggsave("../Figures/polysome_profiles_with_legend.svg", polysome_profiles_with_legend, width = 6, height = 3, dpi = 300)
+ggsave("../Figures/polysome_profiles_with_legend.tiff", polysome_profiles_with_legend, width = 6, height = 3, dpi = 300)
+```
+
+
+#### INTEGRATION
+```{r}
+library(dplyr)
+library(tidyr)
+library(purrr)
+
+Integration_point <- tibble(
+  Number = c("80S_start", "LP_start","LP_end", "PS_end"),
+  Time = c(0.95, 1.5, 2, 3.1)
+)
+description_combinations <- t(combn(Integration_point[[1]], 2))
+
+calculate_auc <- function(df, start_desc, end_desc, col_name) {
+  start_time2 <- as.numeric(Integration_point[Integration_point$Number == start_desc, 2])
+  end_time2 <- as.numeric(Integration_point[Integration_point$Number == end_desc, 2])
+  valid_rows <- (df$Time_corrected >= start_time2) & (df$Time_corrected <= end_time2)
+  valid_data <- df[valid_rows, c("Time_corrected", col_name)]
+  valid_data <- na.omit(valid_data)
+  
+  y_values <- valid_data[[col_name]]
+  x_values <- valid_data$Time_corrected
+  
+  area <- sum((x_values[-1] - x_values[-length(x_values)]) * (y_values[-1] + y_values[-length(y_values)]) / 2)
+  return(area)
+}
+
+Integration <- data.frame(StartPointDesc = description_combinations[, 1], EndPointDesc = description_combinations[, 2])
+for (col_name in names(data_normalized)[-1]) {
+  auc_values <- apply(description_combinations, 1, function(desc) {
+    calculate_auc(data_normalized, desc[1], desc[2], col_name)
+  })
+  Integration[[col_name]] <- auc_values
+}
+
+combinations_of_interest <- data.frame(
+  StartPointDesc = c("80S_start", "LP_start", "LP_start", "LP_end"),
+  EndPointDesc = c("LP_start", "PS_end", "LP_end", "PS_end"),
+  Description = c("Monosome", "Polysome", "light_PS", "heavy_PS")
+)
+
+get_specific_name <- function(start_desc, end_desc) {
+  match_row <- combinations_of_interest[combinations_of_interest$StartPointDesc == start_desc &
+                                        combinations_of_interest$EndPointDesc == end_desc, ]
+  if (nrow(match_row) == 1) {
+    return(match_row$Description)
+  }
+  return(NA)
+}
+
+Integration_relevant <- Integration
+Integration_relevant$Description <- mapply(get_specific_name, Integration_relevant$StartPointDesc, Integration_relevant$EndPointDesc)
+
+Integration_relevant <- Integration_relevant[!is.na(Integration_relevant$Description), ]
+Integration_relevant$StartPointDesc <- NULL
+Integration_relevant$EndPointDesc <- NULL
+
+library(tidyr)
+Integration_relevant <- t(Integration_relevant)
+Integration_relevant <- as.data.frame(Integration_relevant)
+colnames(Integration_relevant) <- Integration_relevant['Description', ]
+Integration_relevant <- Integration_relevant[!rownames(Integration_relevant) %in% 'Description', ]
+
+for (col in names(Integration_relevant)) {
+    Integration_relevant[[col]] <- as.numeric(Integration_relevant[[col]])
+}
+
+# Calculate PS/MS ratio
+Integration_relevant$PS_MS <- with(Integration_relevant, Polysome / Monosome)
+Integration_relevant$LP_HP <- with(Integration_relevant, light_PS / heavy_PS)
+
+### Normalization
+normalized_data <- Integration_relevant %>%
+  mutate(Group = rownames(Integration_relevant)) %>%
+  ungroup()
+normalized_data <- normalized_data %>%
+  separate(Group, into = c("Condition", "Replicate"), sep = "_", convert = TRUE)
+
+normalized_data <- normalized_data %>%
+  group_by(Replicate) %>%
+  mutate(Ctrl_Monosome = Monosome[Condition == "Ctrl"],
+         Norm_Monosome = Monosome / Ctrl_Monosome) %>%
+  mutate(Ctrl_Polysome = Polysome[Condition == "Ctrl"],
+         Norm_Polysome = Polysome / Ctrl_Polysome) %>%
+  mutate(Ctrl_PS_MS = PS_MS[Condition == "Ctrl"],
+         Norm_PS_MS = PS_MS / Ctrl_PS_MS) %>%
+  ungroup()
+
+normalized_data$Condition <- factor(normalized_data$Condition, 
+                              levels = c("Ctrl", "Leu", 
+                                         "Ile","Val", "Double", 
+                                         "Triple"))
+
+```
+
+######## CREATE PLOTS#######
+```{r}
+Monosome <- ggplot(normalized_data, aes(x = Condition, y = Norm_Monosome)) +
+  stat_summary(fun = mean, geom = "bar", position = position_dodge(width = 0.7), 
+               width = 0.7, color = "black") +
+  stat_summary(fun.data = mean_se, geom = "errorbar", position = position_dodge(width = 0.7), 
+             width = 0.2) +
+  labs(x = "Starvation", y = "Norm. Intensity") +
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), # Rotate x-axis labels
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")) 
+ #+geom_signif(comparisons = list(c("Ctrl", "Leu"), c("Ctrl", "Ile"), c("Ctrl", "Val"), c("Ctrl", "Double"), c("Ctrl", "Triple")),
+#              map_signif_level = TRUE, 
+#              tip_length = 0.1,
+#              step_increase = 0.15, vjust = 0.1)
+
+Polysome <- ggplot(normalized_data, aes(x = Condition, y = Norm_Polysome)) +
+  stat_summary(fun = mean, geom = "bar", position = position_dodge(width = 0.7), 
+               width = 0.7, color = "black") +
+ stat_summary(fun.data = mean_se, geom = "errorbar", position = position_dodge(width = 0.7), 
+             width = 0.2) +
+  labs(x = "Starvation", y = "Norm. Intensity") +
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), # Rotate x-axis labels
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")) 
+ #+geom_signif(comparisons = list(c("Ctrl", "Leu"), c("Ctrl", "Ile"), c("Ctrl", "Val"), c("Ctrl", "Double"), c("Ctrl", "Triple")),
+#              map_signif_level = TRUE, 
+#              tip_length = 0.1,
+#              step_increase = 0.15, vjust = 0.1)
+
+ M_P_Ratio <- ggplot(normalized_data, aes(x = Condition, y = Norm_PS_MS)) +
+  stat_summary(fun = mean, geom = "bar", position = position_dodge(width = 0.7), 
+               width = 0.7, color = "black") +
+  stat_summary(fun.data = mean_se, geom = "errorbar", position = position_dodge(width = 0.7), 
+             width = 0.2) +
+  labs(x = "Starvation", y = "Norm. Intensity") +
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), # Rotate x-axis labels
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")) 
+ #+geom_signif(comparisons = list(c("Ctrl", "Leu"), c("Ctrl", "Ile"), c("Ctrl", "Val"), c("Ctrl", "Double"), c("Ctrl", "Triple")),
+#              map_signif_level = TRUE, 
+#              tip_length = 0.1,
+#              step_increase = 0.15, vjust = 0.1)
+
+save(Monosome, Polysome, M_P_Ratio, file="../Figures/Poysome_quantification_Graphs_ratio.RData")
+ggsave("../Figures/Monosome.tiff", Monosome, width = 2.5, height = 3, dpi = 300)
+ggsave("../Figures/Polysome.tiff", Polysome, width = 2.5, height = 3, dpi = 300)
+ggsave("../Figures/ M_P_Ratio.tiff", M_P_Ratio, width = 2.5, height = 3, dpi = 300)
+
+
+```
+
+
+
+

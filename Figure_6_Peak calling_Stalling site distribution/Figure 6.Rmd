@@ -1,0 +1,114 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-08-13"
+---
+
+```{r}
+load("./Figures/Stalling_Counts.RData")
+load("./Figures/VennDiagram_genes.RData")
+Venn_genes <- plot
+load("./Figures/VennDiagram_positions.RData")
+Venn_positions <- plot
+rm(plot)
+load("./Figures/Stalling_METAGENE.RData")
+load("./Figures/hist_Ile_to_first_Triple_plot.RData")
+
+
+load("./Figures/Val_starvation_distribution.RData")
+load("./Figures/Ile_starvation_distribution.RData")
+load("./Figures/Triple_starvation_distribution.RData")
+load("./Figures/Comparison_Proteome.RData")
+
+load("./Figures/heatmap_stalling_relative_ILE.RData")
+load("./Figures/heatmap_stalling_relative_VAL.RData")
+
+```
+
+```{r}
+library(patchwork)
+T1 <- theme(
+  text = element_text(size = 14, family = "Arial", color = "black"),
+  axis.text.x = element_text(hjust = 1, vjust = 0.5, size = 14, family = "Arial", color = "black"),
+  axis.text.y = element_text(size = 14, family = "Arial", color = "black"),
+  axis.title = element_text(size = 14, family = "Arial", color = "black"),
+  plot.title = element_text(size = 14, family = "Arial", color = "black", hjust = 0.5)
+)
+
+design <- "
+ #ABC
+ DEFG
+ HIJJ
+ HIKK
+"
+figure_6 <- 
+  Count + T1+ ggtitle("-Leu")+
+  Venn_positions+ T1+ ggtitle("-Ile")+
+  Venn_genes+T1+ ggtitle("-Val")+
+  
+  Val_starvation_distribution+
+  Ile_starvation_distribution+
+  Triple_starvation_distribution+
+  Comparison_Proteome+
+  
+  meta_stalling_combined+T1+ ggtitle("Double")+
+  hist_Ile_to_first_Triple_plot+T1+ ggtitle("Triple")+
+  heat_Ile+
+  heat_Val+
+
+  plot_layout(design = design)
+
+ggsave(filename = "./Figure_6.svg", plot = figure_6, width = 14, height = 16, units = "in", dpi = 300)
+ggsave(filename = "./Figure_6.png", plot = figure_6, width = 14, height = 16, units = "in", dpi = 300)
+```
+
+
+
+### SUPPLEMENTAL
+```{r}
+library(patchwork)
+
+## SUPPLEMENT
+load("./Figures/Volcano_Double.RData")
+Volcano_Double <- volcano_plot
+load("./Figures/Volcano_Triple.RData")
+Volcano_Triple <- volcano_plot
+load("./Figures/Volcano_Val.RData")
+Volcano_Val <- volcano_plot
+load("./Figures/Volcano_Ile.RData")
+Volcano_Ile <- volcano_plot
+load("./Figures/Volcano_Leu.RData")
+Volcano_Leu <- volcano_plot
+
+load("./Figures/Codons_METAGENE.RData")
+load("./Figures/Position_Val_Ile.RData")
+
+
+T1 <- theme(
+  text = element_text(size = 14, family = "Arial", color = "black"),
+  axis.text.x = element_text(hjust = 1, vjust = 0.5, size = 14, family = "Arial", color = "black"),
+  axis.text.y = element_text(size = 14, family = "Arial", color = "black"),
+  axis.title = element_text(size = 14, family = "Arial", color = "black"),
+  plot.title = element_text(size = 14, family = "Arial", color = "black", hjust = 0.5)
+)
+
+
+design <- "
+#AB
+CDE
+FFF
+"
+figure_6SUPP <- 
+ # Volcano_Leu+ T1+ ggtitle("-Leu")+
+  Volcano_Ile+ T1+ ggtitle("-Ile")+
+  Volcano_Val+
+  Volcano_Double+
+  Volcano_Triple+
+  meta_codons+
+  Position_Val_Ile+
+  plot_layout(design = design)
+
+ggsave(filename = "./Figure_6SUPP.svg", plot = figure_6SUPP, width = 14, height = 16, units = "in", dpi = 300)
+ggsave(filename = "./Figure_6SUPP.png", plot = figure_6SUPP, width = 14, height = 16, units = "in", dpi = 300)
+```
+

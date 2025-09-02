@@ -1,0 +1,682 @@
+## Filter
+```{r}
+load(file="../../General_datasets/datatable_Riboseq_normalized.RData")
+```
+```{r}
+library(dplyr)
+data %>%
+  mutate(dist_from_stop = length - position) %>%
+  group_by(dist_from_stop) %>%
+  summarise(avg_reads = mean(raw_counts, na.rm = TRUE)) %>%
+  ggplot(aes(x = dist_from_stop, y = avg_reads)) +
+  geom_line() +
+  coord_cartesian(xlim = c(0, 100))+
+  labs(title = "Mean ribo-seq reads vs. distance from stop codon",
+       x = "Distance from stop codon (nt)", y = "Average read count")
+```
+
+#First 300 vs last 300 bp: Replicates individually, for different gene length groups and NormRPM vs RPM and Sum vs mean
+```{r}
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(purrr)
+
+end_trim <- 50
+
+clean_sample <- function(s) {
+  s %>%
+    str_remove("^Lina_") %>%
+    str_remove("_RIBO_NA$")
+}
+
+compute_metagene <- function(data, metric = "Norm_RPM", length_min = 0, length_max = Inf, length_label = "all", end_trim = 300) {
+  data %>%
+    filter(length > 2 * end_trim) %>%
+    filter(length >= length_min, length < length_max) %>%
+    mutate(Sample = clean_sample(Sample)) %>%
+    group_by(gene_symbol, Sample) %>%
+    filter((position >= 1 & position <= end_trim) |
+           (position >= (length - end_trim + 1) & position <= length)) %>%
+    ungroup() %>%
+    mutate(partial_position = if_else(position <= end_trim,
+                                      position,
+                                      2 * end_trim - (length - position))) %>%
+    filter(!partial_position %in% c(1:15, (2 * end_trim - 14):(2 * end_trim))) %>%
+    group_by(Sample, partial_position) %>%
+    summarise(
+      sum_reads = sum(.data[[metric]], na.rm = TRUE),
+      mean_reads = mean(.data[[metric]], na.rm = TRUE),
+      sem = sd(.data[[metric]], na.rm = TRUE) / sqrt(n()),
+      .groups = 'drop'
+    ) %>%
+    mutate(
+      lower = .data[[read_types[1]]] - sem,
+      upper = .data[[read_types[1]]] + sem,
+      starvation = str_remove(Sample, "_[1-3]$"),
+      replicate = str_remove_all(Sample, "^CTRL_|DOUBLE_|TRIPLE_|ILE_|LEU_|VAL_"),
+      region = if_else(partial_position <= end_trim, paste0("First ", end_trim), paste0("Last ", end_trim)),
+      metric = metric,
+      length_category = length_label
+    )
+}
+
+metrics <- c("Norm_RPM", "RPM")
+read_types <- c("mean_reads", "sum_reads")
+length_bins <- list(
+  short = c(0, 1000),
+  medium = c(1000, 4000),
+  long = c(4000, Inf),
+  all = c(0, Inf)
+)
+
+metagene_overlap_all <- purrr::cross_df(list(metric = metrics, bin = names(length_bins))) %>%
+  pmap_dfr(function(metric, bin) {
+    bounds <- length_bins[[bin]]
+    compute_metagene(data, metric = metric,
+                     length_min = bounds[1], length_max = bounds[2],
+                     length_label = bin, end_trim = end_trim)
+  })
+
+output_dir <- "metagene_plots"
+dir.create(output_dir, showWarnings = FALSE)
+pdf(file = file.path(output_dir, paste0("metagene_all_plots_", end_trim, "nt_combined.pdf")), width = 10, height = 6)
+
+for (metric_type in unique(metagene_overlap_all$metric)) {
+  for (length_cat in unique(metagene_overlap_all$length_category)) {
+    for (read_type in read_types) {
+      
+      plot_data <- metagene_overlap_all %>%
+        filter(metric == metric_type, length_category == length_cat)
+      
+      y_label <- if (read_type == "mean_reads") "Mean RPM" else "Sum RPM"
+      midpoint <- end_trim
+      
+      region_labels <- c(paste0("First ", end_trim), paste0("Last ", end_trim))
+      region_colors <- setNames(c("blue", "red"), region_labels)
+      region_fills  <- setNames(c("lightblue", "pink"), region_labels)
+      
+      
+      ## --- Raw plot ---
+      p_raw <- ggplot(plot_data, aes(x = partial_position,
+                                     y = .data[[read_type]],
+                                     color = region,
+                                     group = interaction(region, replicate))) +
+        geom_line(alpha = 0.8) +
+        geom_ribbon(aes(ymin = .data[[read_type]] - sem, ymax = .data[[read_type]] + sem, fill = region), alpha = 0.3, color = NA) +
+        geom_vline(xintercept = midpoint, linetype = "dashed", color = "black") +
+        scale_color_manual(values = region_colors) +
+        scale_fill_manual(values = region_fills)+
+        facet_wrap(~ starvation, ncol = 3) +
+        theme_classic(base_family = "sans") +
+        labs(
+          title = paste("Raw:", metric_type, "-", read_type, "-", length_cat),
+          x = "Position in CDS [nt]",
+          y = y_label
+        ) +
+        scale_x_continuous(
+          breaks = c(0, midpoint, 2 * end_trim),
+          labels = c("Start", paste0("+/-", end_trim), "Stop")
+        ) +
+        theme(
+          text = element_text(color = "black"),
+          axis.title = element_text(size = 12, face = "bold"),
+          axis.text = element_text(size = 8, color = "black"),
+          plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+          panel.border = element_rect(color = "black", fill = NA, size = 1),
+          panel.grid.major = element_line(color = "grey80", linetype = "dashed"),
+          panel.grid.minor = element_blank()
+        )
+      
+      ggsave(file.path(output_dir, paste0("metagene_", metric_type, "_", read_type, "_", length_cat, "_raw_", end_trim, "nt.png")),
+             plot = p_raw, width = 10, height = 6, dpi = 300)
+      print(p_raw)
+
+      ## --- Smoothed plot ---
+      p_smooth <- ggplot(plot_data, aes(x = partial_position,
+                                        y = .data[[read_type]],
+                                        color = region,
+                                        group = region)) +
+        geom_smooth(se = TRUE, method = "loess", span = 0.3) +
+        geom_vline(xintercept = midpoint, linetype = "dashed", color = "black") +
+               scale_color_manual(values = region_colors) +
+        scale_fill_manual(values = region_fills)+
+        facet_wrap(~ starvation, ncol = 3) +
+        theme_classic(base_family = "sans") +
+        labs(
+          title = paste("Smoothed:", metric_type, "-", read_type, "-", length_cat),
+          x = "Position in CDS [nt]",
+          y = y_label
+        ) +
+        scale_x_continuous(
+          breaks = c(0, midpoint, 2 * end_trim),
+          labels = c("Start", paste0("+/-", end_trim), "Stop")
+        ) +
+        theme(
+          text = element_text(color = "black"),
+          axis.title = element_text(size = 12, face = "bold"),
+          axis.text = element_text(size = 8, color = "black"),
+          plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+          panel.border = element_rect(color = "black", fill = NA, size = 1),
+          panel.grid.major = element_line(color = "grey80", linetype = "dashed"),
+          panel.grid.minor = element_blank()
+        )
+
+      ggsave(file.path(output_dir, paste0("metagene_", metric_type, "_", read_type, "_", length_cat, "_smooth_", end_trim, "nt.png")),
+             plot = p_smooth, width = 10, height = 6, dpi = 300)
+      print(p_smooth)
+    }
+  }
+}
+
+dev.off()
+```
+
+#Metagene: Relative position with first 15 and last 15 positions removed
+```{r}
+library(dplyr)
+library(ggplot2)
+library(stringr)
+
+metrics <- c("Norm_RPM")
+output_dir <- "metagene_plots/Figures"
+dir.create(output_dir, showWarnings = FALSE)
+#pdf(file = file.path(output_dir, "metagene_relative_position_combined.pdf"), width = 10, height = 6)
+
+for (metric in metrics) {
+  
+  metagene_overlap <- data %>%
+    filter(length > 200) %>%
+    group_by(gene_symbol) %>%
+    filter(position > 15 & position < (length - 15)) %>%
+    ungroup() %>%
+    mutate(normalized_position = pmin(floor(100 * (position - 15) / (length - 30)), 99)) %>%
+    group_by(condition, normalized_position) %>%
+    summarise(
+      sum_reads = sum(.data[[metric]], na.rm = TRUE),
+      mean_reads = mean(.data[[metric]], na.rm = TRUE),
+      sem = sd(.data[[metric]], na.rm = TRUE) / sqrt(n()),
+      .groups = 'drop'
+    ) %>%
+    mutate(
+      lower_sum = sum_reads - sem,
+      upper_sum = sum_reads + sem,
+      lower_mean = mean_reads - sem,
+      upper_mean = mean_reads + sem,
+      metric_type = metric
+    )
+  
+  conditions <- setdiff(unique(metagene_overlap$condition), "CTRL")
+  
+  for (read_type in c("mean_reads")) {
+    plots <- list()
+    
+for (starvation in conditions) {
+  dat <- metagene_overlap %>%
+    filter(condition %in% c("CTRL", starvation))
+  
+  ymin_col <- if (read_type == "sum_reads") "lower_sum" else "lower_mean"
+  ymax_col <- if (read_type == "sum_reads") "upper_sum" else "upper_mean"
+  
+condition_colors <- c("CTRL" = "black", "ILE" = "#377EB8", "LEU" = "#4DAF4A", 
+                      "VAL" = "#FF7F00", "DOUBLE" = "purple", "TRIPLE" = "darkred")
+
+
+used_conditions <- unique(dat$condition)
+plot_colors <- condition_colors[used_conditions]
+
+current_plot_raw <- ggplot(dat, aes(
+  x = normalized_position,
+  y = .data[[read_type]],
+  color = condition,
+  fill = condition
+)) +
+  geom_line(size = 1) +
+  geom_ribbon(aes(ymin = .data[[ymin_col]], ymax = .data[[ymax_col]]), alpha = 0.4, color = NA) +
+  scale_color_manual(values = plot_colors) +
+  scale_fill_manual(values = plot_colors) +
+  labs(
+    x = "Normalized Position in CDS (%)"
+  ) +
+  theme_classic(base_family = "sans") +
+ theme(
+  text = element_text(size = 14, colour = "black"),   # Sets default for all text elements
+  axis.title = element_text(colour = "black", size = 14),
+  axis.text = element_text(colour = "black", size = 14),
+  legend.title = element_text(colour = "black", size = 14),
+  legend.text = element_text(colour = "black", size = 14),
+  plot.title = element_text(colour = "black", size = 12, face = "bold", hjust = 0.5),
+  legend.position = "none"
+)+
+  coord_cartesian(ylim = c(0.0018,0.0025), xlim = c(8,92))
+  
+  base_name_raw <- paste0("METAGENE_", read_type, "_", metric, "_Ctrlvs", starvation, "_raw")
+  ggsave(file.path(output_dir, paste0(base_name_raw, ".png")), current_plot_raw, width = 4, height = 3, dpi = 300)
+  print(current_plot_raw)
+
+}
+  }
+}
+#dev.off()
+```
+
+
+## POLARITY SCORES: Scatter plot
+```{r}
+library(dplyr)
+library(broom)
+library(purrr)
+
+data <- data %>%
+  mutate(wi = (2 * position - (length + 1)) / (length - 1))%>%
+  mutate(pi = (RPM * wi) / total_RPM)
+
+polarity_scores <- data %>%
+  group_by(gene_symbol, condition, replicate) %>%
+  summarize(total_pi=sum(pi, na.rm = TRUE))%>%
+  ungroup()%>%
+  group_by(gene_symbol, condition) %>%
+  mutate(mean_total_pi = mean(total_pi, na.rm = TRUE))
+
+t_test_results <- pairwise.t.test(polarity_scores$total_pi,interaction(polarity_scores$condition), p.adjust.method = "bonferroni")
+p_values_global <- t_test_results$p.value
+
+calculate_p_values <- function(data) {
+  ctrl_data <- data %>% 
+    filter(condition == "CTRL") %>% 
+    pull(total_pi)
+  data %>%
+    group_by(condition) %>%
+    reframe(mean_total_pi = mean(mean_total_pi), p_value = ifelse(condition == "CTRL", NA, t.test(total_pi, ctrl_data)$p.value))
+}
+
+results <- polarity_scores %>%
+  group_by(gene_symbol) %>%
+  group_modify(~ calculate_p_values(.x))%>%
+  distinct(gene_symbol, condition, .keep_all = TRUE)
+
+ctrl_data <- results %>%
+  filter(condition == "CTRL") %>%
+  select(gene_symbol, ctrl_pi = mean_total_pi)
+
+results <- results %>%
+  left_join(ctrl_data, by = c("gene_symbol")) %>%
+  mutate(differential_pi = mean_total_pi-ctrl_pi)
+
+test_conditions <- setdiff(unique(results$condition), "CTRL")
+
+output_dir <- "pi_scatter_plots"
+dir.create(output_dir, showWarnings = FALSE)
+pdf(file = file.path(output_dir, "Polarity_Scatter.pdf"), width = 10, height = 6)
+
+for (cond in test_conditions) {
+  dat <- results %>%
+    filter(condition == cond)
+  
+  p <- ggplot(dat, aes(x = ctrl_pi, y = mean_total_pi)) +
+    geom_point(alpha = 0.6) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey40") +
+    geom_smooth(method = "lm", se = FALSE, color = "orange") +
+    labs(
+      title = paste("Polarity:", cond, "vs CTRL"),
+      x = "Ctrl mean PI",
+      y = paste(cond, "mean PI")
+    ) +
+    theme_classic(base_family = "sans") +
+    theme(
+      text = element_text(size = 14),
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+    )
+  ggsave(filename = file.path(output_dir, paste0("scatter_CTRL_vs_", cond, ".png")),
+         plot = p, width = 5, height = 4, dpi = 300)
+  
+  print(p)
+}
+
+dev.off()
+```
+## Polarity scores: Barplot for mean polarity score and for amount of extracted transcripts:
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggsignif)
+library(tidyr)
+library(forcats)
+
+# Define desired condition order
+condition_levels <- c("Ctrl", "Leu", "Ile", "Val", "Double", "Triple")
+
+# Recode and set factor levels
+results <- results %>%
+  mutate(condition = recode(condition,
+                            "CTRL" = "Ctrl", "LEU" = "Leu", "ILE" = "Ile",
+                            "VAL" = "Val", "DOUBLE" = "Double", "TRIPLE" = "Triple"),
+         condition = factor(condition, levels = condition_levels))
+
+# Summary statistics
+summary_stats <- results %>%
+  group_by(condition) %>%
+  summarise(
+    mean_pi = mean(mean_total_pi, na.rm = TRUE),
+    sem_pi = sd(mean_total_pi, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+# ANOVA + Tukey
+anova_res <- aov(mean_total_pi ~ condition, data = results)
+tukey_res <- TukeyHSD(anova_res)
+tukey_df <- as.data.frame(tukey_res$condition)
+tukey_df$comparison <- rownames(tukey_df)
+
+# Significant pairs
+sig_pairs <- tukey_df %>%
+  filter(`p adj` < 0.05) %>%
+  separate(comparison, into = c("group1", "group2"), sep = "-") %>%
+  mutate(
+    group1 = factor(group1, levels = condition_levels),
+    group2 = factor(group2, levels = condition_levels),
+    y_position = max(summary_stats$mean_pi + summary_stats$sem_pi, na.rm = TRUE) + 0.1
+  )
+
+# Custom theme
+custom_theme <- theme_classic() +
+  theme(
+    axis.text = element_text(color = "black", family = "Arial", size = 14),
+    axis.title = element_text(color = "black", family = "Arial", size = 14),
+    axis.ticks = element_line(color = "black"),
+    text = element_text(family = "Arial"),
+    axis.line = element_line(color = "black"),
+    legend.position = "none",
+    axis.text.x = element_text(angle = 90, hjust = 1, size = 14)
+  )
+
+# Plot
+barplot_pi <- ggplot(summary_stats, aes(x = condition, y = mean_pi)) +
+  geom_bar(stat = "identity", fill = "gray", color = "black") +
+  geom_errorbar(aes(ymin = mean_pi - sem_pi, ymax = mean_pi + sem_pi), width = 0.2) +
+  custom_theme +
+  labs(y = "Mean Total PI", x = "Condition") +
+  coord_cartesian(ylim = c(-0.04,0.02))
+
+ggsave("../Figures/barplot_mean_PI.png", barplot_pi, width = 3, height = 4, dpi = 300)
+
+sig_counts <- results %>%
+  filter(p_value < 0.05, differential_pi < -0.15) %>%
+  mutate(condition = factor(condition, levels = condition_levels)) %>%
+  group_by(condition) %>%
+  summarise(sig_transcripts = n(), .groups = "drop")
+
+barplot_sig_counts <- ggplot(sig_counts, aes(x = condition, y = sig_transcripts)) +
+  geom_bar(stat = "identity", fill = "gray", color = "black") +
+  geom_text(aes(label = sig_transcripts),
+            angle = 90,
+            hjust = 0,
+            vjust = 0.5,
+            color = "white",
+            size = 5,
+            family = "Arial") +
+  custom_theme +
+  labs(y = "Number of Significant Transcripts", x = "Condition") +
+  coord_cartesian(ylim = c(0, max(sig_counts$sig_transcripts) * 1.1))
+
+ggsave("../Figures/barplot_sig_transcripts.png", barplot_sig_counts, width = 3, height = 4, dpi = 300)
+
+barplot_sig_counts
+barplot_pi 
+```
+
+
+
+# RPF densitie along transcript only on specific codons!!
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(stringr)
+
+# Parameters
+end_trim <- 300
+aa_of_interest <- c("Val", "Ile", "Leu", "Ser")
+
+# Codon to AA lookup
+codon_table <- c(
+  "TTT"="Phe", "TTC"="Phe", "TTA"="Leu", "TTG"="Leu",
+  "CTT"="Leu", "CTC"="Leu", "CTA"="Leu", "CTG"="Leu",
+  "ATT"="Ile", "ATC"="Ile", "ATA"="Ile", "ATG"="Met",
+  "GTT"="Val", "GTC"="Val", "GTA"="Val", "GTG"="Val",
+  "TCT"="Ser", "TCC"="Ser", "TCA"="Ser", "TCG"="Ser",
+  "AGT"="Ser", "AGC"="Ser"
+)
+
+# Annotate amino acids, simplify Sample and starvation columns
+data2 <- data %>%
+  mutate(
+    amino_acid = codon_table[codons],
+    Sample = str_remove_all(Sample, "^Lina_|_RIBO_NA$"),
+    starvation = str_remove(Sample, "_[1-3]$")
+  ) %>%
+  filter(amino_acid %in% aa_of_interest)
+
+# Aggregate metagene
+metagene_codons <- data2 %>%
+  filter(length > 2 * end_trim) %>%
+  group_by(gene_symbol, Sample) %>%
+  filter((position >= 1 & position <= end_trim) |
+         (position >= (length - end_trim + 1) & position <= length)) %>%
+  ungroup() %>%
+  mutate(
+    partial_position = if_else(position <= end_trim,
+                               position,
+                               2 * end_trim - (length - position))
+  ) %>%
+  filter(!partial_position %in% c(1:15, (2 * end_trim - 14):(2 * end_trim))) %>%
+  group_by(starvation, amino_acid, partial_position) %>%
+  summarise(
+    mean_reads = mean(Norm_RPM, na.rm = TRUE),
+    sem= sd(Norm_RPM)/sqrt(n()),
+    .groups = "drop"
+  ) %>%
+    mutate(
+      lower = mean_reads - sem,
+      upper = mean_reads + sem,
+      region = if_else(partial_position <= end_trim, paste0("First ", end_trim), paste0("Last ", end_trim)))%>%
+  filter(starvation %in% c("CTRL", unique(data2$starvation)))
+
+# Output directory
+output_dir <- "metagene_codons_faceted"
+dir.create(output_dir, showWarnings = FALSE)
+
+# All starvations (excluding CTRL)
+starvations <- setdiff(unique(metagene_codons$starvation), "CTRL")
+
+midpoint <- end_trim
+
+# Loop over each condition
+for (starvation_to_plot in starvations) {
+  # Subset data for CTRL + condition
+  plot_data <- metagene_codons %>%
+    filter(starvation %in% c("CTRL", starvation_to_plot),
+           amino_acid %in% aa_of_interest)
+  
+  # Color map
+  starvation_colors <- setNames(c("black", "gray"), c("CTRL", starvation_to_plot))
+  
+  # Plot
+  p <- ggplot(plot_data, aes(x = partial_position, y = mean_reads, color = starvation)) +
+    geom_line(linewidth = 1) +
+    geom_vline(xintercept = midpoint, linetype = "dashed", color = "black") +
+    scale_x_continuous(breaks = c(0, midpoint, 2 * end_trim),
+          labels = c("Start", paste0("+/-", end_trim), "Stop"))+
+    facet_wrap(~ amino_acid, ncol = 1, scales = "free_y") +
+    scale_color_manual(values = starvation_colors) +
+    labs(
+      title = paste("Codon-specific Norm_RPM:", starvation_to_plot, "vs CTRL"),
+      x = "Position in CDS [nt]",
+      y = "Mean Norm_RPM",
+      color = "Condition"
+    ) +
+    theme_classic(base_family = "sans") +
+    theme(
+      strip.text = element_text(color = "black", size = 12, face = "bold"),
+      axis.title = element_text(color = "black", size = 12),
+      axis.text = element_text(color = "black", size = 10),
+      legend.text = element_text(color = "black"),
+      legend.title = element_text(color = "black"),
+      plot.title = element_text(hjust = 0.5, face = "bold", color = "black"),
+      panel.border = element_rect(color = "black", fill = NA),
+      legend.position = "right"
+    )
+
+  # Save plot
+  ggsave(
+    file.path(output_dir, paste0("metagene_", starvation_to_plot, "_vs_CTRL_codons.png")),
+    plot = p, width = 10, height = 7, dpi = 300
+  )
+
+  print(p)
+}
+
+
+```
+
+
+### Boxplot for quantification of ramp
+```{r}
+custom_theme <- theme_classic() +
+  theme(
+    axis.text = element_text(color = "black", family = "Arial"),
+    axis.title = element_text(color = "black", family = "Arial"),
+    axis.ticks = element_line(color = "black"),
+    panel.border = element_rect(color = "black", fill = NA),
+    text = element_text(family = "Arial"),
+    axis.line = element_line(color = "black"),
+    legend.position = "none"
+  )
+
+data_summary <- data %>%
+  group_by(gene_symbol, condition, replicate) %>%
+  summarise(
+    Score_start = sum(Norm_RPM[normalized_position >= 0 & normalized_position <= 20], na.rm = TRUE),
+    Score_end = sum(Norm_RPM[normalized_position >= 80 & normalized_position <= 100], na.rm = TRUE)
+  )
+
+ctrl_means <- data_summary %>%
+  filter(condition == "CTRL") %>%
+  group_by(gene_symbol) %>%
+  summarise(
+    Ctrl_Score_start = mean(Score_start, na.rm = TRUE),
+    Ctrl_Score_end = mean(Score_end, na.rm = TRUE)
+  )
+
+data_summary <- data_summary %>%
+  left_join(ctrl_means, by = "gene_symbol")%>%
+  mutate(
+    norm_Score_start = Score_start / Ctrl_Score_start,
+    norm_Score_end = Score_end / Ctrl_Score_end) %>%
+  group_by(gene_symbol, condition) %>%
+  summarise(
+    mean_Score_start = mean(norm_Score_start, na.rm = TRUE),
+    mean_Score_end = mean(norm_Score_end, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+data_summary <- data_summary %>%
+  mutate(across(everything(), ~ ifelse(is.infinite(.), NA, .)))
+data_summary <- data_summary %>%
+  na.omit()
+
+library(forcats)
+data_summary <- data_summary %>%
+  mutate(
+    condition = factor(condition, levels = c("CTRL", "LEU", "ILE", "VAL", "DOUBLE", "TRIPLE")),
+    condition = fct_recode(condition,
+                           "Ctrl" = "CTRL",
+                           "Leu" = "LEU",
+                           "Ile" = "ILE",
+                           "Val" = "VAL",
+                           "Double" = "DOUBLE",
+                           "Triple" = "TRIPLE")
+  )
+data_long <- data_summary %>%
+  pivot_longer(cols = c(mean_Score_start, mean_Score_end), 
+               names_to = "Score_Type", 
+               values_to = "Score") %>%
+  mutate(Score_Type = factor(Score_Type, levels = c("mean_Score_start", "mean_Score_end"),
+                             labels = c("5' score [1-20]", "3' score [80-100]")))
+
+#######################################p-values#####################################################
+
+pairwise_results <- data_long %>%
+  group_by(Score_Type) %>%
+  group_split() %>%
+  map_dfr(function(df) {
+    pairs <- combn(unique(df$condition), 2, simplify = FALSE)
+    map_dfr(pairs, function(pair) {
+      test <- t.test(Score ~ condition, data = df %>% filter(condition %in% pair))
+      tibble(
+        Score_Type = unique(df$Score_Type),
+        Comparison = paste(pair, collapse = " vs "),
+        P_Value = test$p.value
+      )
+    })
+  })
+
+# Adjust p-values (FDR)
+pairwise_results <- pairwise_results %>%
+  mutate(Adjusted_P_Value = p.adjust(P_Value, method = "fdr"),
+    Signif = case_when(
+      Adjusted_P_Value < 0.001 ~ "***",
+      Adjusted_P_Value < 0.01 ~ "**",
+      Adjusted_P_Value < 0.05 ~ "*",
+      TRUE ~ "ns"
+    )
+  )
+
+################################################################################################################################################################################
+
+Boxplot_metagene_box <- ggplot(data_long, aes(x = condition, y = log2(Score))) +
+  geom_boxplot(outlier.shape = NA, fill = "grey", color = "black") +
+  stat_summary(fun = median, geom = "point", shape = 18, size = 3, color = "red") +
+  facet_wrap(~ Score_Type) +
+ # geom_text(data = signif_annotations,
+#            aes(x = group2, y = y_position, label = stars),
+#            color = "black", size = 5, inherit.aes = FALSE) +
+  custom_theme +
+  labs(y = "Score ratio to Ctrl [log2]", x = "Condition") +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 14)
+  )+
+  coord_cartesian(ylim = c(-1,1))
+
+bar_data <- data_long %>%
+  group_by(condition, Score_Type) %>%
+  mutate(Score = log2(Score))%>%
+  filter(is.finite(Score)) %>%
+  summarise(
+    mean_score = median(Score),
+    sem_score = sd(Score)/ sqrt(n()),
+    .groups = "drop"
+  )
+# Plot
+Boxplot_metagene <- ggplot(bar_data, aes(x = condition, y = mean_score)) +
+  geom_bar(stat = "identity", fill = "grey", color = "black", width = 0.7) +
+  geom_errorbar(aes(ymin = mean_score - sem_score, ymax = mean_score + sem_score), 
+                width = 0.2, color = "black") +
+  facet_wrap(~ Score_Type) +
+  custom_theme +
+  labs(y = "Score ratio to Ctrl [log2]", x = "Condition") +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 14)
+  ) +
+  coord_cartesian(ylim = c(-0.2, 0.3))
+
+ggsave("../Figures/Boxplot_metagene2.png", Boxplot_metagene,  width = 5.5, height = 4, dpi = 300 )
+
+Boxplot_metagene
+```

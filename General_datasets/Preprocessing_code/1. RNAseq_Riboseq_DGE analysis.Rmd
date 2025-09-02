@@ -1,0 +1,287 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+# Load necessary libraries
+library(edgeR)
+library(stringr)
+#data <- read.csv("../2024_01_29_RNA_RFP_count.csv", row.names = 1) # unique mapping
+data <- read.csv("../2025_18_03_RNA_RFP_count_mm.csv", row.names = 1) # multimapping
+
+numeric_columns <- sapply(data, is.numeric)
+data <- subset(data, biotype == 'protein_coding')
+data <- data[!duplicated(data[["gene_symbol"]]), ]
+rownames(data) <- data$gene_symbol
+
+#Filtering
+#ctrl_columns <- grep('Ctrl', colnames(data), value = TRUE)
+data <- data[apply(data[, numeric_columns], 1, function(x) all(x >= 10)), ]
+
+# Function to preprocess RNA and RPF data
+process_data <- function(data, start_col, end_col, categories_order) {
+  processed_data <- as.matrix(data[, start_col:end_col])
+  colnames(processed_data) <- gsub("RNA_|RFP_|_S\\d+", "", colnames(processed_data))
+  new_order <- unlist(lapply(categories_order, function(cat) grep(cat, colnames(processed_data))))
+  processed_data[, new_order]
+}
+
+categories_order <- c("Ctrl", "Leu", "Ile", "Val", "Double", "Triple")
+data_RNA <- process_data(data, 1, 18, categories_order)
+data_RPF <- process_data(data, 19, 36, categories_order)
+sample_info <- rep(categories_order, each = 3)
+
+# Create DGEList objects
+dge_RNA <- DGEList(counts = data_RNA, group = factor(sample_info))
+dge_RPF <- DGEList(counts = data_RPF, group = factor(sample_info))
+
+# Filter, normalize, and estimate dispersion
+filter_normalize_estimate <- function(dge_data) {
+  dge_data <- dge_data[filterByExpr(dge_data), , keep.lib.sizes = FALSE]
+  dge_data <- calcNormFactors(dge_data)
+  estimateDisp(dge_data)
+}
+
+dge_RNA <- filter_normalize_estimate(dge_RNA)
+dge_RPF <- filter_normalize_estimate(dge_RPF)
+
+# Model fitting
+design <- model.matrix(~ sample_info, data = dge_RNA$samples)
+fit_RNA <- glmQLFit(dge_RNA, design)
+fit_RPF <- glmQLFit(dge_RPF, design)
+```
+
+#Differential gene expression analysis
+```{r}
+library(edgeR)
+library(dplyr)
+library(tibble)
+
+# Function to process differential expression results
+process_DE_results <- function(DE_results, prefix) {
+  results <- as.data.frame(DE_results)
+  results$Gene <- rownames(results)
+  results <- results %>% 
+    dplyr::rename(!!paste0(prefix, "_logFC") := logFC, 
+           !!paste0(prefix, "_PValue") := PValue) %>%
+    select(Gene, ends_with("_logFC"), ends_with("_PValue"))
+  return(results)
+}
+
+# Perform DGE analysis and process results
+conditions <- c("Double", "Ile", "Leu", "Triple", "Val")
+EdgeR_results_RNA <- list()
+EdgeR_results_RPF <- list()
+
+for (i in seq_along(conditions)) {
+  cond <- conditions[i]
+  coef_index <- i + 1
+
+  # Perform DGE analysis for RNA and RPF
+  DE_RNA <- glmQLFTest(fit_RNA, coef = coef_index)
+  DE_RPF <- glmQLFTest(fit_RPF, coef = coef_index)
+
+  # Process and store results
+  EdgeR_results_RNA[[cond]] <- process_DE_results(DE_RNA, cond)
+  EdgeR_results_RPF[[cond]] <- process_DE_results(DE_RPF, cond)
+}
+
+# Combine results into dataframes
+EdgeR_results_RNA <- Reduce(function(x, y) merge(x, y, by = "Gene", all = TRUE), EdgeR_results_RNA)
+EdgeR_results_RPF <- Reduce(function(x, y) merge(x, y, by = "Gene", all = TRUE), EdgeR_results_RPF)
+
+# Update column names and set row names
+colnames(EdgeR_results_RNA) <- paste0("RNA_", colnames(EdgeR_results_RNA))
+colnames(EdgeR_results_RPF) <- paste0("RPF_", colnames(EdgeR_results_RPF))
+row.names(EdgeR_results_RNA) <- EdgeR_results_RNA$RNA_Gene
+row.names(EdgeR_results_RPF) <- EdgeR_results_RPF$RPF_Gene
+
+# Find common genes and combine RNA and RPF data
+common <- intersect(rownames(EdgeR_results_RNA), rownames(EdgeR_results_RPF))
+RNA <- EdgeR_results_RNA[common, ]
+RPF <- EdgeR_results_RPF[common, ]
+EdgeR_all <- cbind(RNA, RPF)
+
+# Prepare table with cpm values
+RNA_cpm <- as.data.frame(cpm(dge_RNA, log = TRUE))
+RPF_cpm <- as.data.frame(cpm(dge_RPF, log = TRUE))
+
+# Find common genes and combine RNA and RPF data
+common_cpm <- intersect(rownames(RNA_cpm), rownames(RPF_cpm))
+RNA_cpm <- RNA_cpm[common_cpm, ]
+RPF_cpm <- RPF_cpm[common_cpm, ]
+colnames(RNA_cpm) <- paste0("RNA_", colnames(RNA_cpm))
+colnames(RPF_cpm) <- paste0("RPF_", colnames(RPF_cpm))
+cpm_all <- cbind(RNA_cpm, RPF_cpm)
+
+# Identify genes with logCPM <= 1 in RNA_cpm and RPF_cpm dataframes
+low_cpm_genes_RNA <- rownames(RNA_cpm)[apply(RNA_cpm, 1, function(x) any(x <= 1))]
+low_cpm_genes_RPF <- rownames(RPF_cpm)[apply(RPF_cpm, 1, function(x) any(x <= 1))]
+
+# Combine and find unique genes to exclude
+genes_to_exclude <- unique(c(low_cpm_genes_RNA, low_cpm_genes_RPF))
+cpm_all<- cpm_all[!rownames(cpm_all) %in% genes_to_exclude, ]
+EdgeR_all <- EdgeR_all[!EdgeR_all$RNA_Gene %in% genes_to_exclude, ]
+
+cpm_all <- cpm_all %>% 
+  rename_with(.fn = ~make.unique(.), .cols = everything())%>%
+  rownames_to_column("gene_symbol")
+```
+
+
+### Calculate TRANSLATION EFFICIENCY with statistics
+```{r}
+conditions <- c("Ctrl", "Leu", "Ile", "Val", "Double", "Triple")
+mean_RNA <- list()
+
+for (cond in conditions) {
+  RNA_cols <- grep(paste0("RNA_", cond, "_\\d+$"), colnames(cpm_all), value = TRUE)
+  mean_RNA[[cond]] <- rowMeans(cpm_all[, RNA_cols])
+}
+
+for (cond in conditions) {
+  RPF_cols <- grep(paste0("RPF_", cond, "_\\d+$"), colnames(cpm_all), value = TRUE)
+  for (RPF_col in RPF_cols) {
+    cpm_all[[paste0("TE_", RPF_col)]] <- cpm_all[[RPF_col]] - mean_RNA[[cond]]
+  }
+}
+
+# Adjusting column names to remove the 'RPF_' prefix for TE columns
+column_names <- colnames(cpm_all)
+column_names[(length(column_names)-17):length(column_names)] <- gsub("RPF_", "", column_names[(length(column_names)-17):length(column_names)])
+colnames(cpm_all) <- column_names
+
+# Preparing TE_data
+row.names(cpm_all) <- cpm_all$gene_symbol
+TE_data <- cpm_all %>% select(contains("TE_"))
+TE_data$Gene <- rownames(TE_data)
+
+# Calculate log2FC of TE data normalized to Ctrl mean
+log2FC_list <- list()
+
+for (cond in conditions[-1]) {
+  cond_columns <- grep(paste0("TE_", cond, "_"), colnames(TE_data), value = TRUE)
+  ctrl_columns <- grep("TE_Ctrl_", colnames(TE_data), value = TRUE)
+  cond_mean <- rowMeans(TE_data[, cond_columns], na.rm = TRUE)
+  ctrl_mean <- rowMeans(TE_data[, ctrl_columns], na.rm = TRUE)
+  log2FC <- cond_mean - ctrl_mean
+  log2FC_df <- data.frame(Gene = rownames(TE_data), Log2FC = log2FC)
+  colnames(log2FC_df)[2] <- paste("TE", cond, "logFC", sep = "_")
+  log2FC_list[[cond]] <- log2FC_df
+}
+
+combined_log2FC <- Reduce(function(x, y) merge(x, y, by = "Gene", all = TRUE), log2FC_list)
+EdgeR_all$Gene <- rownames(EdgeR_all)
+EdgeR_all <- merge(EdgeR_all, combined_log2FC, by = "Gene", all = TRUE)
+
+conditions <- c("Ctrl", "Leu", "Ile", "Val", "Double", "Triple")
+mean_values_list <- list()
+
+for (cond in conditions) {
+  columns <- grep(cond, colnames(TE_data), value = TRUE)
+  mean_values <- rowMeans(TE_data[, columns], na.rm = TRUE)
+  mean_df <- data.frame(Gene = rownames(TE_data), Mean = mean_values)
+colnames(mean_df)[2] <- paste("TE", cond, "mean", sep = "_")
+mean_values_list[[cond]] <- mean_df
+}
+
+combined_means <- Reduce(function(x, y) merge(x, y, by = "Gene", all = TRUE), mean_values_list)
+EdgeR_all <- merge(EdgeR_all, combined_means, by = "Gene", all = TRUE)
+
+EdgeR_all$RNA_Gene <- NULL
+EdgeR_all$RPF_Gene <- NULL
+```
+
+```{r}
+library(edgeR)
+
+split_names = strsplit(colnames(data)[1:36], split="_")
+meta_data = data.frame(
+  type = sapply(split_names, "[[", 1),
+  AA = sapply(split_names, "[[", 2),
+  replicate = sapply(split_names, "[[", 3)
+)
+
+conditions <- c('Leu', 'Ile', 'Val', 'Double', "Triple")
+results_list <- list()
+
+for(AA_cond_2 in conditions) {
+    pos <- c(grep('Ctrl', colnames(data)), grep(AA_cond_2, colnames(data)))
+    meta_data_sub <- meta_data[pos, ]
+    data_sub <- data[, pos]
+
+    dgelist <- DGEList(counts = data_sub, genes = data.frame(rownames(data), data$gene_symbol, data$biotype))
+    dgelist <- calcNormFactors(dgelist)
+
+    design <- model.matrix(~ meta_data_sub$type*meta_data_sub$AA, data=dgelist$samples)
+    dgelist <- estimateDisp(dgelist, design)
+
+    fit <- glmFit(dgelist, design)
+    lrt <- glmLRT(fit, coef=4)
+
+    temp_results <- as.data.frame(topTags(lrt, n=Inf))
+     temp_results$FDR[temp_results$FDR < 1e-50] <- 1e-50
+    
+    # Store results
+    results_list[[AA_cond_2]] <- temp_results
+}
+
+Leu <- results_list[["Leu"]][, c("FDR", "rownames.data.")]
+colnames(Leu) <- c("TE_Leu_FDR", "Gene")
+
+Ile <- results_list[["Ile"]][, c("FDR", "rownames.data.")]
+colnames(Ile) <- c("TE_Ile_FDR", "Gene")
+
+Val <- results_list[["Val"]][, c("FDR", "rownames.data.")]
+colnames(Val) <- c("TE_Val_FDR", "Gene")
+
+Double <- results_list[["Double"]][, c("FDR", "rownames.data.")]
+colnames(Double) <- c("TE_Double_FDR", "Gene")
+
+Triple <- results_list[["Triple"]][, c("FDR", "rownames.data.")]
+colnames(Triple) <- c("TE_Triple_FDR", "Gene")
+
+merged_FDR <- merge(Leu, Ile, by = "Gene")
+merged_FDR <- merge(merged_FDR, Val, by = "Gene")
+merged_FDR <- merge(merged_FDR, Double, by = "Gene")
+merged_FDR <- merge(merged_FDR, Triple, by = "Gene")
+EdgeR_all <- merge(merged_FDR, EdgeR_all, by = "Gene")
+
+EdgeR_all$RNA_Gene <- NULL
+EdgeR_all$RPF_Gene <- NULL
+
+colnames(EdgeR_all) <- gsub("FDR", "PValue", colnames(EdgeR_all))
+```
+
+
+## Save tables
+```{r}
+cpm_all_MM <- cpm_all
+EdgeR_all_MM <- EdgeR_all
+
+
+
+library(openxlsx)
+save(file="../log2CPMs_MM.RData", cpm_all_MM )
+save(file= "../log2FC_pValue_MM.RData", EdgeR_all_MM)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

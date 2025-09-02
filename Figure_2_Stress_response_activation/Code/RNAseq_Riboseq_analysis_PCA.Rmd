@@ -1,0 +1,793 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(readxl)
+library(dplyr)
+load("../../General_datasets/log2CPMs.RData")
+load("../../General_datasets/log2FC_pValue.RData")
+rownames(cpm_all) <- cpm_all$gene_symbol
+row.names(EdgeR_all) <- EdgeR_all$Gene
+
+```
+##Histograms
+```{r}
+for (i in 2:ncol(cpm_all)) {
+  hist(cpm_all[[i]], main=paste("Histogram of", names(cpm_all)[i]), xlab=names(cpm_all)[i])
+}
+```
+##Mean center data to Ctrl
+```{r}
+rna_cols <- grep("^RNA_", names(cpm_all))
+rpf_cols <- grep("^RPF_", names(cpm_all))
+te_cols <- grep("^TE_", names(cpm_all))
+
+rna_ctrl_cols <- grep("^RNA_Ctrl", names(cpm_all))
+rpf_ctrl_cols <- grep("^RPF_Ctrl", names(cpm_all))
+te_ctrl_cols <- grep("^TE_Ctrl", names(cpm_all))
+
+rna_ctrl_means <- rowMeans(cpm_all[, rna_ctrl_cols], na.rm = TRUE)
+rpf_ctrl_means <- rowMeans(cpm_all[, rpf_ctrl_cols], na.rm = TRUE)
+te_ctrl_means <- rowMeans(cpm_all[, te_ctrl_cols], na.rm = TRUE)
+
+cpm_centered_ctrl <- cpm_all
+cpm_centered_ctrl[, rna_cols] <- sweep(cpm_centered_ctrl[, rna_cols], 1, rna_ctrl_means)
+cpm_centered_ctrl[, rpf_cols] <- sweep(cpm_centered_ctrl[, rpf_cols], 1, rpf_ctrl_means)
+cpm_centered_ctrl[, te_cols] <- sweep(cpm_centered_ctrl[, te_cols], 1, te_ctrl_means)
+
+for (i in 2:ncol(cpm_centered_ctrl)) {
+  hist(cpm_centered_ctrl[[i]], main=paste("Histogram of", names(cpm_centered_ctrl)[i]), xlab=names(cpm_centered_ctrl)[i], breaks =50, xlim=c(-2,5 ))
+}
+```
+
+```{r}
+library(enrichR)
+library(ggplot2)
+library(dplyr)
+library(readxl)
+library(openxlsx)
+library(purrr)
+library(tibble)
+
+selection_scenarios <- list(
+  c("RNA_"),
+  c("RPF_"),
+  c("TE_")
+)
+for (selection_pattern in selection_scenarios) {
+
+pca_matrix <- cpm_centered_ctrl[!duplicated(cpm_centered_ctrl$gene_symbol) & !duplicated(cpm_centered_ctrl$gene_symbol, fromLast = TRUE), ] %>% 
+select(gene_symbol, starts_with(selection_pattern)) 
+pca_matrix <- na.omit(pca_matrix)
+
+rownames(pca_matrix) <- NULL
+
+pca_matrix <- pca_matrix %>%
+  column_to_rownames("gene_symbol") %>% 
+  as.matrix() %>% 
+  t()
+
+sample_pca <- prcomp(pca_matrix, scale=TRUE)
+pc_eigenvalues <- sample_pca$sdev^2
+pc_scores <- sample_pca$x
+loadings <- as.data.frame(sample_pca$rotation*1000)
+
+
+pc_eigenvalues <- tibble(PC = factor(1:length(pc_eigenvalues)), variance = pc_eigenvalues) %>% 
+  mutate(pct = variance/sum(variance)*100) %>% 
+  mutate(pct_cum = cumsum(pct))
+
+pc_scores <- pc_scores %>% 
+  as_tibble(rownames = "sample") %>% 
+  separate(col = sample, into = c("Type","Treatment", "Replicate"), sep = "_")
+
+###Scree Plot####
+
+Scree <- pc_eigenvalues %>%
+  ggplot(aes(x = PC)) +
+  geom_col(aes(y = pct)) +
+  geom_line(aes(y = pct_cum, group = 1)) + 
+  geom_point(aes(y = pct_cum)) +
+  labs(x = "Principal component", y = "Fraction of variance explained") +
+  theme(text = element_text(size = 14),
+        axis.title = element_text(size = 14), 
+        axis.text = element_text(size = 14),
+        plot.title = element_text(size = 14)) 
+
+selection_string <- paste(selection_pattern, collapse="_")
+file_path <- paste0("../Figures/PCA/", selection_string, "/Scree_plot.png")
+
+ if (!dir.exists(dirname(file_path))) {
+    dir.create(dirname(file_path), recursive = TRUE)
+ }
+
+ggsave(file_path, plot = Scree, width = 8, height = 6, units = "in")
+
+
+library(openxlsx)
+loadings$Gene <- row.names(loadings)
+write.xlsx(loadings, file = paste0("../Figures/PCA/Loadings_PCA_logFC/", selection_string, ".xlsx"))
+
+# Loop through each of the first 2 PCs
+for (pc in 1:4) {
+  sorted_df <- loadings[order(loadings[, pc]), ]
+  sorted_df$Rank <- seq_len(nrow(sorted_df))
+
+  loading_plot <- ggplot(sorted_df, aes(x = Rank, y = sorted_df[, pc])) +
+    geom_point() +
+    labs(title = paste("PC", pc, "Loadings"), x = "Gene Rank", y = "Loading") +
+    theme(
+    text = element_text(size = 16), 
+    plot.title = element_text(size = 20), 
+    axis.title = element_text(size = 18), 
+    axis.text = element_text(size = 14)
+  )
+  print(loading_plot)
+
+file_path <- paste0("../Figures/PCA/", selection_string, "/PC", pc, "_Loadings.png")
+
+ if (!dir.exists(dirname(file_path))) {
+    dir.create(dirname(file_path), recursive = TRUE)
+ }
+
+ggsave(file_path, plot = loading_plot, width = 5, height = 5, units = "in")
+
+}
+
+###PCA score plots###
+
+library(ggrepel)
+pc_pairs <- list(c("PC1", "PC2"), c("PC3", "PC4"))
+
+for (pair in pc_pairs) {
+  pc_x <- pair[1]
+  pc_y <- pair[2]
+
+  numeric_pc_x <- as.numeric(sub("PC", "", pc_x))
+  numeric_pc_y <- as.numeric(sub("PC", "", pc_y))
+
+  variance_x <- filter(pc_eigenvalues, PC == numeric_pc_x)$pct
+  variance_y <- filter(pc_eigenvalues, PC == numeric_pc_y)$pct
+
+p <- ggplot(pc_scores, aes_string(x = pc_x, y = pc_y)) +
+    geom_point(aes(fill = Treatment, shape = Type, group = interaction(Type, Treatment, Replicate)), size = 3) +
+     scale_fill_manual(values = c("Leu" = "#4DAF4A", "Ile" = "#377EB8", "Val" = "#FF7F00", "Double" = "#40E0D0", "Triple" = "darkred")) +
+    scale_shape_manual(values = c("RNA" = 21, "RPF" = 24, "TE"=23, "Proteome"=23)) +
+labs(title = "Principal Component Analysis",
+         subtitle = paste(pc_x, "vs", pc_y),
+         x = paste(pc_x, "\nVariance Explained:", round(variance_x, 2), "%"),
+         y = paste(pc_y, "\nVariance Explained:", round(variance_y, 2), "%"),
+         fill = "Treatment",
+         shape = "Type") +
+    theme_classic(base_family = "Arial") +
+ theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.position = "none",  # This removes the legend
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")
+)
+p
+
+
+file_path1 <- paste0("../Figures/PCA/", selection_string, "/PCA_", pc_x, "_vs_", pc_y, ".png")
+file_path2 <- paste0("../Figures/PCA/", selection_string, "/PCA_", pc_x, "_vs_", pc_y, ".RData")
+
+ if (!dir.exists(dirname(file_path))) {
+    dir.create(dirname(file_path), recursive = TRUE)
+ }
+ggsave(file_path1, plot = p, width = 3.5, height = 3.5, units = "in")
+save(p, file=file_path2)
+
+}
+
+library(enrichR)
+library(ggplot2)
+library(dplyr)
+
+dbs <- listEnrichrDbs()
+dbb <- dbs$libraryName[grep('GO_.+2023|KEGG_2019.+Mouse', dbs$libraryName)]
+
+PC_loadings_split <- lapply(names(loadings)[-length(names(loadings))], function(pc) {
+sorted_loadings_pos <- loadings %>%
+  mutate(Gene = rownames(loadings)) %>%
+ #  slice_max(order_by = .data[[pc]], n = 350) %>%
+    arrange(desc(.data[[pc]])) %>%
+    filter(.data[[pc]] > 15) %>%
+    .$Gene
+  sorted_loadings_neg <- loadings %>%
+    mutate(Gene = rownames(loadings)) %>%
+#    slice_min(order_by = .data[[pc]], n = 350) %>%
+    arrange(.data[[pc]]) %>%
+   filter(.data[[pc]] < -15) %>%
+    .$Gene
+  list(positive = sorted_loadings_pos, negative = sorted_loadings_neg)
+})
+
+names(PC_loadings_split) <- names(loadings)[-length(names(loadings))]
+
+conditions <- c("PC1", "PC2", "PC3", "PC4")
+
+for (cond in conditions) {
+  for (direction in c("positive", "negative")) {
+    genes <- PC_loadings_split[[cond]][[direction]]
+    GO <- enrichr(genes, databases = dbb)
+  
+   desired_categories <- c("GO_Biological_Process_2023", "GO_Molecular_Function_2023", "KEGG_2019_Mouse")
+    for (category in desired_categories) {
+      if (!is.null(GO[[category]])) {
+        top_terms <- GO[[category]] %>%
+          filter(Adjusted.P.value < 0.05 & Combined.Score > 15) %>%
+          arrange(Adjusted.P.value) %>%
+          head(15)
+          
+        plot <- ggplot(top_terms, aes(x = reorder(Term, -Combined.Score), y = Combined.Score)) +
+          geom_col() +
+          coord_flip() +
+          labs(x = "Term", y = "Combined Score", title = paste("Top", direction, "EnrichR Terms for", cond, ":", category)) +
+          theme_minimal()
+        
+        print(plot)
+        
+        # Save the plot to a file
+        file_path_svg <- paste0("../Figures/PCA/", selection_string,"/", cond, "_", direction, "_", gsub(" ", "_", gsub("_2023", "", category)), ".png")
+        if (!dir.exists(dirname(file_path_svg))) {
+          dir.create(dirname(file_path_svg), recursive = TRUE)
+        }
+      
+          ggsave(file_path_svg, plot = plot, width = 8, height = 5, units = "in")
+        file_path_rdata <- sub("\\.png$", ".RData", file_path_svg)
+        save(plot, file = file_path_rdata)
+        file_path_excel <- sub("\\.png$", ".xlsx", file_path_svg)
+        write_xlsx(top_terms, path= file_path_excel)
+      }
+    }
+  }
+}
+}
+```
+
+
+
+#Vulcano plots, amount of disregulations and Overlap
+```{r}
+library(ggrepel)
+library(ggplot2)
+library(dplyr)
+
+create_volcano_plot <- function(data, dep, type, title) {
+suffix <- switch(type,
+                     "RNA" = "RNA",
+                     "RPF" = "RPF", 
+                     "TE" = "TE")
+    
+    up_color <- "#B2182B"
+    up_shape <- 19
+    down_color <- "#2166AC"
+    down_shape <- 19
+    ns_color <- "gray19"
+    ns_shape <- 21
+
+    # Calculate the y-axis limit
+    min_pvalue <- min(data[[paste0(suffix, "_", dep, "_PValue")]], na.rm = TRUE)
+    y_axis_limit <- c(0, -log10(min_pvalue) + 5)
+
+    # Classify data points
+    data <- data %>%
+        mutate(Type = ifelse(get(paste0(suffix, "_", dep, "_PValue")) < 0.05 & get(paste0(suffix, "_", dep, "_logFC")) > 0.58, "up",
+                             ifelse(get(paste0(suffix, "_", dep, "_PValue")) < 0.05 & get(paste0(suffix, "_", dep, "_logFC")) < -0.58, "down", "N.S.")))
+
+    up_count <- sum(data$Type == "up", na.rm = TRUE)
+    down_count <- sum(data$Type == "down", na.rm = TRUE)
+    
+    # Filter outliers for annotation
+    outlier_limit <- 1.1
+    outlier_data <- subset(data, get(paste0(suffix, "_", dep, "_PValue")) < 0.01 & abs(get(paste0(suffix, "_", dep, "_logFC"))) > outlier_limit)
+
+     plot <- ggplot(data, aes(x = get(paste0(suffix, "_", dep, "_logFC")), y = -log10(get(paste0(suffix, "_", dep, "_PValue"))))) +
+        geom_point(aes(color = Type, shape = Type, fill = Type), size = 3, alpha = 0.3) +
+        scale_color_manual(values = c("N.S." = ns_color, "up" = up_color, "down" = down_color)) +
+        scale_shape_manual(values = c("N.S." = ns_shape, "up" = up_shape, "down" = down_shape)) +
+        scale_fill_manual(values = c("N.S." = ns_color, "up" = up_color, "down" = down_color)) +
+        theme_minimal() +
+        labs(title = title, x = expression(Log[2]*FC), y = expression("-" * Log[10] * " P value")) +
+        theme(plot.title = element_text(hjust = 0.5, size = 18), 
+              axis.title = element_text(size = 14, face = "bold"), 
+              axis.text = element_text(size = 12, color = "black"), 
+              legend.position = "top", legend.title = element_blank(), 
+              legend.text = element_text(size = 12), 
+              panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+              panel.border = element_blank(), panel.background = element_blank(), 
+              axis.line = element_line(color = "black"), 
+              axis.ticks = element_line(color = "black")) +
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+        geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+        lims(y = y_axis_limit) +
+      #  coord_cartesian(xlim = c(-3, 3)) +
+      #  scale_x_continuous(breaks = seq(-3, 3, by = 1)) +
+        geom_text(x = 0, y = -log10(min_pvalue) + 1, 
+                  label = paste("Up (n =", up_count, ")"), hjust = -0.2, vjust = -2, size = 3, color = up_color) +
+        geom_text(x = 0, y = -log10(min_pvalue) + 1, 
+                  label = paste("Down (n =", down_count, ")"), hjust = 1.1, vjust = -2, size = 3, color = down_color)
+
+    # Add outlier annotations if any
+    if (nrow(outlier_data) > 0) {
+        plot <- plot + geom_text_repel(data = outlier_data,
+                                       aes(label = rownames(outlier_data), x = get(paste0(suffix, "_", dep, "_logFC")), y = -log10(get(paste0(suffix, "_", dep, "_PValue")))),
+                                       size = 3, box.padding = 0.35, point.padding = 0.5, segment.color = 'grey50', max.overlaps = 10)
+    }
+print(plot)
+    ggsave(paste0("../Figures/Volcano/", title, ".svg"), plot, units = "in", height = 4, width = 4 ) 
+    ggsave(paste0("../Figures/Volcano/", title, ".tiff"), plot, units = "in", height = 4, width = 4 ) 
+    save(plot, file= paste0("../Figures/Volcano/", title, ".RData")) 
+    
+     return(data.frame(Type = type, Condition = dep, Up = up_count, Down = down_count))
+}
+
+conditions <- c("Leu", "Ile", "Val", "Double", "Triple")
+counts_list <- list()
+
+for (cond in conditions) {
+    counts_list[[length(counts_list) + 1]] <- create_volcano_plot(EdgeR_all, cond, "RNA", paste("RNA", cond, "vs. Ctrl"))
+    counts_list[[length(counts_list) + 1]] <- create_volcano_plot(EdgeR_all, cond, "RPF", paste("RPF", cond, "vs. Ctrl"))
+    counts_list[[length(counts_list) + 1]] <- create_volcano_plot(EdgeR_all, cond, "TE", paste("TE", cond, "vs. Ctrl"))
+}
+
+counts_df <- do.call(rbind, counts_list)
+counts_long <- counts_df %>%
+    pivot_longer(cols = c("Up", "Down"), names_to = "Direction", values_to = "Count") %>%
+    mutate(Condition = factor(Condition, levels = c("Leu", "Ile", "Val", "Double", "Triple")))
+
+
+Counts_RNA_RPF <- ggplot(counts_long, aes(x = Condition, y = Count, fill = Direction)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black")+
+  geom_text(aes(label = Count, y=0, hjust = 0), position = position_dodge(width = 0.9), angle = 90, color = "white", size = 4) +
+    facet_wrap(~Type) +
+    theme_classic() +
+    labs(title = "Amount disregulated transcripts", x = "Condition", y = "Count") +
+    scale_fill_manual(values = c("Up" = "darkred", "Down" = "darkblue")) +
+    theme(plot.title = element_text(hjust = 0.5, size = 18, family = "Arial", color = "black"), 
+          axis.title = element_text(size = 14, face = "bold", family = "Arial", color = "black"), 
+          axis.text.x = element_text(size = 14, color = "black", angle = 45, hjust = 1, vjust = 1, family = "Arial"), 
+          axis.text.y = element_text(size = 14, color = "black", family = "Arial"), 
+          legend.position = "top", legend.title = element_blank(), 
+          legend.text = element_text(size = 14, family = "Arial", color = "black"), 
+          axis.line = element_line(color = "black"),
+          axis.ticks = element_line(color = "black"),
+          strip.text = element_text(size = 14, family = "Arial", color = "black"))
+
+ggsave("../Figures/Volcano/Counts_UP_DOWN.svg", Counts_RNA_RPF)
+ggsave("../Figures/Volcano/Counts_UP_DOWN.tiff", Counts_RNA_RPF)
+save(Counts_RNA_RPF, file="../Figures/Volcano/Counts_UP_DOWN.RData")
+
+
+####Overlap graphs with UpsetR
+library(ggupset)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+
+UpsetR_plot <- function(suffix) {
+  conditions <- c("Leu", "Ile", "Val", "Double", "Triple")
+  
+  list_up <- list()
+  list_down <- list()
+  list_all <- list()
+
+  for (cond in conditions) {
+    up_genes <- EdgeR_all %>%
+      filter(
+        .data[[paste0(suffix, cond, "_logFC")]] > 0.58 & 
+        .data[[paste0(suffix, cond, "_PValue")]] < 0.05
+      ) %>%
+      pull(Gene)
+    
+    down_genes <- EdgeR_all %>%
+      filter(
+        .data[[paste0(suffix, cond, "_logFC")]] < -0.58 & 
+        .data[[paste0(suffix, cond, "_PValue")]] < 0.05
+      ) %>%
+      pull(Gene)
+    
+    all_genes <- EdgeR_all %>%
+      filter(
+        (abs(.data[[paste0(suffix, cond, "_logFC")]]) > 0.58) & 
+        .data[[paste0(suffix, cond, "_PValue")]] < 0.05
+      ) %>%
+      pull(Gene)
+    
+    list_up[[cond]] <- up_genes
+    list_down[[cond]] <- down_genes
+    list_all[[cond]] <- all_genes
+  }
+  
+  plot_lists <- function(gene_list, plot_name) {
+    df <- tibble(
+      Genes = unlist(gene_list),
+      Condition = rep(names(gene_list), times = sapply(gene_list, length))
+    ) %>%
+      group_by(Genes) %>%
+      summarize(Condition = list(unique(Condition)))
+    
+    plot <- ggplot(df, aes(x = Condition)) +
+      geom_bar(fill = "gray") +
+      scale_x_upset(n_intersections = 15) +
+      theme_classic() +
+      labs( title = plot_name, x = "Condition",y = "Number of Genes") +
+      theme(
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 12)
+      )
+    
+    # Save the plot
+    ggsave(filename = paste0("../Figures/Volcano/Overlaps/", plot_name, ".svg"),plot = plot, units = "in",height = 4,width = 6.5, dpi = 300)
+    ggsave(filename = paste0("../Figures/Volcano/Overlaps/", plot_name, ".tiff"),plot = plot, units = "in",height = 4,width = 6.5, dpi = 300)
+    save(plot, file = paste0("../Figures/Volcano/Overlaps/", plot_name, ".RData"))
+  }
+  
+  # Generate and save plots
+  plot_lists(list_up, paste0("Upregulated_Genes_in_", suffix))
+  plot_lists(list_down, paste0("Downregulated_Genes_in_", suffix))
+  plot_lists(list_all, paste0("All_Significant_Genes_in_", suffix))
+  
+  # Return the lists of genes
+  return(list(
+    upregulated = list_up,
+    downregulated = list_down,
+    all_significant = list_all
+  ))
+}
+
+# Run the function for each dataset
+results_RNA <- UpsetR_plot("RNA_")
+results_RPF <- UpsetR_plot("RPF_")
+results_TE  <- UpsetR_plot("TE_")
+
+```
+
+### Genes/GO terms for Ile starvation alone and common transcripts
+```{r}
+load("../../General_datasets/log2FC_pValue.RData")
+
+conditions <- c("Leu", "Ile", "Val", "Double", "Triple")
+suffix <- "TE_"
+filtered_genes <- list()
+
+for (cond in conditions) {
+  filtered_genes[[cond]] <- EdgeR_all %>%
+    filter(
+      abs(.data[[paste0(suffix, cond, "_logFC")]]) > 0.58 & 
+      .data[[paste0(suffix, cond, "_PValue")]] < 0.05
+    ) %>%
+    pull(Gene)
+}
+
+specific_to_Ile <- setdiff(filtered_genes[["Ile"]], 
+                           unlist(filtered_genes[names(filtered_genes) != "Ile"]))
+
+specific_to_Leu <- setdiff(filtered_genes[["Leu"]], 
+                           unlist(filtered_genes[names(filtered_genes) != "Leu"]))
+
+common_genes <- Reduce(intersect, filtered_genes)
+
+exclusive_to_Val <- setdiff(filtered_genes[["Val"]], unlist(filtered_genes[c("Leu", "Ile", "Double", "Triple")]))
+exclusive_to_Triple <- setdiff(filtered_genes[["Triple"]], unlist(filtered_genes[c("Leu", "Ile", "Double", "Val")]))
+shared_by_Val_and_Triple <- intersect(filtered_genes[["Val"]], filtered_genes[["Triple"]])
+specific_Val_and_Triple <- union(
+  union(exclusive_to_Val, exclusive_to_Triple),
+  shared_by_Val_and_Triple
+)
+
+
+dbs <- listEnrichrDbs()
+dbb <- dbs$libraryName[grep('GO_.+2023|KEGG_2019.+Mouse', dbs$libraryName)]
+
+
+
+#ILE STARVATION
+GO_Ile <- enrichr(specific_to_Ile, databases = dbb)
+desired_categories <- c("GO_Biological_Process_2023")
+    for (category in desired_categories) {
+      if (!is.null(GO_Ile[[category]])) {
+        top_terms <- GO_Ile[[category]] %>%
+          filter(Adjusted.P.value < 0.05 & Combined.Score > 15) %>%
+          arrange(Adjusted.P.value) %>%
+          head(15)
+          
+        plot_ile <- ggplot(top_terms, aes(x = reorder(Term, -Combined.Score), y = Combined.Score)) +
+          geom_col() +
+          coord_flip() +
+          labs(x = "Term", y = "Combined Score", title = paste(category)) +
+          theme_minimal()
+        print(plot_ile)
+      }}
+data_ile <- plot_ile$data %>% 
+  arrange(desc(Combined.Score)) %>% 
+  head(5) %>% 
+  mutate(Origin = "-Ile specific")
+
+# COMMON GENES
+GO_common_genes <- enrichr(common_genes, databases = dbb)
+desired_categories <- c("GO_Biological_Process_2023")
+    for (category in desired_categories) {
+      if (!is.null(GO_common_genes[[category]])) {
+        top_terms <- GO_common_genes[[category]] %>%
+          filter(Adjusted.P.value < 0.05 & Combined.Score > 15) %>%
+          arrange(Adjusted.P.value) %>%
+          head(15)
+          
+        plot_all <- ggplot(top_terms, aes(x = reorder(Term, -Combined.Score), y = Combined.Score)) +
+          geom_col() +
+          coord_flip() +
+          labs(x = "Term", y = "Combined Score", title = paste(category)) +
+          theme_minimal()
+        print(plot_all)
+      }}
+
+data_all <- plot_all$data %>% 
+  arrange(desc(Combined.Score)) %>% 
+  head(5) %>% 
+  mutate(Origin = "Common")
+
+# LEU STARVATION
+GO_Leu <- enrichr(specific_to_Leu, databases = dbb)
+desired_categories <- c("GO_Biological_Process_2023")
+    for (category in desired_categories) {
+      if (!is.null(GO_Leu[[category]])) {
+        top_terms <- GO_Leu[[category]] %>%
+          filter(Adjusted.P.value < 0.05 & Combined.Score > 15) %>%
+          arrange(Adjusted.P.value) %>%
+          head(15)
+          
+        plot_Leu <- ggplot(top_terms, aes(x = reorder(Term, -Combined.Score), y = Combined.Score)) +
+          geom_col() +
+          coord_flip() +
+          labs(x = "Term", y = "Combined Score", title = paste(category)) +
+          theme_minimal()
+        print(plot_Leu)
+      }}
+
+data_Leu <- plot_Leu$data %>% 
+  arrange(desc(Combined.Score)) %>% 
+  head(5) %>% 
+  mutate(Origin = "-Leu specific")
+
+# VAL AND TRIPLE STARVATION
+GO_Val_Triple <- enrichr(specific_Val_and_Triple, databases = dbb)
+desired_categories <- c("GO_Biological_Process_2023")
+    for (category in desired_categories) {
+      if (!is.null(GO_Val_Triple[[category]])) {
+        top_terms <- GO_Val_Triple[[category]] %>%
+          filter(Adjusted.P.value < 0.05 & Combined.Score > 15) %>%
+          arrange(Adjusted.P.value) %>%
+          head(15)
+          
+        plot_Val_Triple <- ggplot(top_terms, aes(x = reorder(Term, -Combined.Score), y = Combined.Score)) +
+          geom_col() +
+          coord_flip() +
+          labs(x = "Term", y = "Combined Score", title = paste(category)) +
+          theme_minimal()
+        print(plot_Val_Triple)
+      }}
+
+data_Val_Triple <- plot_Val_Triple$data %>% 
+  arrange(desc(Combined.Score)) %>% 
+  head(5) %>% 
+  mutate(Origin = "-Val & Triple specific")
+
+
+combined_data <- bind_rows(data_all, 
+                           #data_Leu, 
+                           data_ile) 
+                           #data_Val_Triple)
+combined_data <- combined_data %>%
+  mutate(
+    Term = gsub("\\(.*?\\)", "", Term),
+    Term = trimws(Term))
+
+combined_data <- combined_data %>%
+  mutate(
+    Origin = factor(Origin, levels = c("Common","-Leu specific" ,"-Ile specific", "-Val & Triple specific")),
+    Term = factor(Term, levels = combined_data %>% arrange(Origin, Combined.Score) %>% pull(Term))
+  )
+
+custom_colors <- c(
+  "Common" = "darkgray",
+  "-Ile specific" = "blue3",
+  "-Val & Triple specific" = "orange",
+  "-Leu specific" = "green"
+)
+
+combined_plot <- ggplot(combined_data, aes(x = Term, y = Combined.Score, fill = Origin)) +
+  geom_col(width = 0.7) +
+ geom_text(
+    aes(y = 0, label = Term), # Set x = 0 to align all labels
+    hjust = 0, # Align text to the left
+    size = 4, color = "black", family = "Arial") +
+  coord_flip() +
+  labs(x = "Origin", y = "Combined Score", title = "Top 5 Terms from Each Graph") +
+  scale_fill_manual(values = custom_colors) +
+  theme_classic() +
+  theme(
+    text = element_text(size = 14, family = "Arial", color = "black"),
+    axis.text.y = element_blank(), # Remove y-axis labels
+    axis.ticks.y = element_blank(), # Remove y-axis ticks
+    axis.text = element_text(size = 14, family = "Arial", color = "black"),
+    plot.title = element_text(size = 14, family = "Arial", color = "black", face = "bold"),
+    legend.title = element_text(size = 14, family = "Arial", color = "black"),
+    legend.text = element_text(size = 14, family = "Arial", color = "black")
+  )
+
+        
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+##Regression graph of mean centered values
+```{r}
+library(corrplot)
+library(dplyr)
+
+long_cpm <- cpm_centered_ctrl %>% 
+#  select(-which(grepl("Proteome", names(cpm_centered)))) %>%
+  pivot_longer(
+    cols = -gene_symbol, 
+    names_to = c("measurement", "condition", "replicate"), 
+    names_sep = "_", 
+    values_to = "value"
+  )
+
+mean_cpm <- long_cpm %>% 
+  group_by(gene_symbol, measurement, condition) %>% 
+  summarise(mean_value = mean(value, na.rm = TRUE), .groups = 'drop')
+
+df <- mean_cpm %>% 
+  unite("new_column", measurement, condition, sep = "_") %>%
+  pivot_wider(names_from = new_column, values_from = mean_value)
+
+
+rownames(df) <- df$gene_symbol
+df$gene_symbol <- NULL
+
+df_filtered <- df %>%
+  select(-matches("(_Double)$"))
+cor_matrix <- cor(df_filtered, use = "complete.obs")
+
+#png("C:/Users/worpenbe/Desktop/EPFL/Projects/Polysome profile/NGS_Riboseq_starvations_28.11.2023/Results/Analysis/plot/corrPlot.png", width = 1000, height = 1000) 
+
+# Visualize the correlation matrix
+corr_plot <-corrplot(cor_matrix, method = "circle", order = "alphabet",
+         tl.col = "black", tl.srt = 45, tl.cex = 2, cl.cex = 2) 
+
+
+#dev.off()
+```
+
+
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+RNAvsRPF <- function(col_prefix, title) {
+  EdgeR_filter <- EdgeR_all %>%
+    mutate(
+       Category = case_when(
+       get(paste0("TE_", col_prefix, "_FDR")) < 0.05 &
+        get(paste0("TE_", col_prefix, "_logFC")) < -0.58 ~ "TE down",
+          
+       get(paste0("TE_", col_prefix, "_FDR")) < 0.05 &
+        get(paste0("TE_", col_prefix, "_logFC")) > 0.58 ~ "TE up",
+        
+        TRUE ~ "Other"
+      )
+    )
+
+   num_teUP <- sum(EdgeR_filter$Category == "TE up")
+   num_teDOWN <- sum(EdgeR_filter$Category == "TE down")
+  
+
+   
+  plot <- ggplot(EdgeR_filter, aes(x = get(paste0("RNA_", col_prefix, "_logFC")), y = get(paste0("RPF_",col_prefix, "_logFC")), color = Category)) +
+    geom_point(aes(fill=Category), alpha = 0.5, size = 3, stroke = 0.5, colour="black", pch = 21) +  # Adjusted size and added stroke
+    scale_fill_manual(values = c("TE down" = "darkblue", "TE up" = "darkred", "Other" = "azure1")) +
+    geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
+    labs(x = "RNA-seq log2FC", y = "Ribo-seq log2FC", title = title, color = "Category") +
+    lims(x = c(-5, 5), y = c(-5, 5)) +
+    theme_classic() +  # Start with a minimal theme
+     theme(
+        text = element_text(size = 14, colour = "black"), # Increase text size for overall plot and set color to black
+        axis.text = element_text(size = 12, color = "black"), # Ensure axis text is black and slightly larger
+        axis.title = element_text(size = 14, color = "black"), # Ensure axis titles are black and slightly larger
+        panel.grid.major = element_blank(), # Remove major grid lines
+        panel.grid.minor = element_blank(), # Remove minor grid lines
+        axis.line = element_line(size = 0.5, colour = "black") # Add black axis lines
+    ) +
+    annotate("text", x = 4, y = -3, label = paste("TE up:", num_teUP), size = 5, color="darkred") +
+    annotate("text", x = 4, y = -3.8, label = paste("TE down:", num_teDOWN), size = 5, color="darkblue")+
+   guides(color = FALSE, fill = FALSE) # Remove legends
+
+  print(plot)
+  ggsave(paste0("C:/Users/worpenbe/Desktop/EPFL/Projects/Polysome profile/NGS_Riboseq_starvations_28.11.2023/Results/Analysis/plot/RNAvsRPF/",col_prefix, "RNAvsRPF.png"), plot = plot, width = 5, height = 5, dpi = 300)
+}
+
+conditions <- c("Leu", "Ile", "Val", "Double", "Triple")
+
+# Loop to create plots for each condition
+for (cond in conditions) {
+  title <- paste(cond, "vs Ctrl")
+  RNAvsRPF(cond, title)
+}
+```
+
+
+
+
+

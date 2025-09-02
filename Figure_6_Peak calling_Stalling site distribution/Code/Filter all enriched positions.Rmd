@@ -1,0 +1,1797 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-06-20"
+---
+```{r}
+load(file="../../General_datasets/datatable_Riboseq_normalized.RData")
+```
+# Identify genes with peaks in comparison to the control (RUN ONLY ONCE AND LOAD DATA AFTERWARDS)
+```{r}
+library(dplyr)
+library(tidyr)
+
+ctrl_means <- data %>%
+    filter(condition == "CTRL") %>%
+    group_by(name, position) %>%
+    summarise(
+      ctrl_mean = mean(RPM, na.rm = TRUE),
+      .groups = 'drop'
+    )
+
+ctrl_means_norm <- data %>%
+    filter(condition == "CTRL") %>%
+    group_by(name, position) %>%
+    summarise(
+      ctrl_mean_norm = mean(Norm_RPM, na.rm = TRUE),
+      .groups = 'drop'
+    )
+
+data <- data %>%
+    left_join(ctrl_means, by = c("name", "position"))%>%
+    left_join(ctrl_means_norm, by = c("name", "position"))
+
+data[is.na(data)] <- 0
+
+wide_data <- data %>%
+  dplyr::select(position, gene_symbol, Sample, RPM, codons, ctrl_mean) 
+wide_data <- wide_data %>%
+  group_by(position, gene_symbol, codons, Sample, ctrl_mean) %>%
+  summarize(RPM = sum(RPM), .groups = "drop")
+wide_data <- wide_data %>%
+   pivot_wider(names_from = Sample, values_from = RPM)
+
+wide_data_norm <- data %>%
+  dplyr::select(position, gene_symbol, Sample, Norm_RPM, ctrl_mean_norm, codons)
+wide_data_norm <- wide_data_norm %>%
+  group_by(position, gene_symbol, codons, Sample, ctrl_mean_norm) %>%
+  summarize(Norm_RPM = sum(Norm_RPM), .groups = "drop")
+wide_data_norm <- wide_data_norm %>%
+  pivot_wider(names_from = Sample, values_from = Norm_RPM)
+```
+```{r}
+condition <- "Ile" 
+
+condition_pattern <- paste0("Lina_", toupper(condition))
+
+filtered_data <- wide_data %>%
+  dplyr::select(position, gene_symbol, ctrl_mean, codons, matches(paste0("Lina_(", toupper(condition), "|CTRL)"))) %>%
+  mutate(RPM_mean = rowMeans(select(., starts_with(paste0("Lina_", toupper(condition)))), na.rm = TRUE)) %>%
+  filter(RPM_mean > 0 & ctrl_mean > 0) %>%
+  mutate(
+    FC_RPM = RPM_mean / ctrl_mean,
+    RPM_pValue = apply(., 1, function(row) {
+      t.test(
+        as.numeric(row[grep(paste0("Lina_", toupper(condition)), names(row))]),
+        as.numeric(row[grep("Lina_CTRL", names(row))])
+      )$p.value
+    })
+  )
+
+filtered_data_norm <- wide_data_norm %>%
+  dplyr::select(position, gene_symbol, ctrl_mean_norm, codons, matches(paste0("Lina_(", toupper(condition), "|CTRL)"))) %>%
+  mutate(norm_RPM_mean = rowMeans(select(., starts_with(paste0("Lina_", toupper(condition)))), na.rm = TRUE)) %>%
+  filter(norm_RPM_mean > 0 & ctrl_mean_norm > 0) %>%
+  mutate(
+    FC_RPM_norm = norm_RPM_mean / ctrl_mean_norm,
+    norm_RPM_pValue = apply(., 1, function(row) {
+      t.test(as.numeric(row[grep(paste0("Lina_", toupper(condition)), names(row))]),
+             as.numeric(row[grep("Lina_CTRL", names(row))])
+      )$p.value
+    })
+  )
+
+filtered_data <- filtered_data%>%
+select(position, gene_symbol, codons, ctrl_mean, RPM_mean, FC_RPM, RPM_pValue)
+filtered_data_norm <- filtered_data_norm%>%
+select(position, gene_symbol, codons, ctrl_mean_norm, norm_RPM_mean, FC_RPM_norm, norm_RPM_pValue)
+
+Ile_FC_stalling <- merge(filtered_data, filtered_data_norm, by=c("position", "gene_symbol", "codons"))
+```
+```{r}
+save(Double_FC_stalling, file="../Data/Double_FC_stalling.RData")
+save(Triple_FC_stalling, file="../Data/Triple_FC_stalling.RData")
+save(Val_FC_stalling, file="../Data/Val_FC_stalling.RData")
+save(Leu_FC_stalling, file="../Data/Leu_FC_stalling.RData")
+save(Ile_FC_stalling, file="../Data/Ile_FC_stalling.RData")
+```
+
+###################################################################################################################
+
+```{r}
+load("../Data/Double_FC_stalling.RData")
+load("../Data/Triple_FC_stalling.RData")
+load("../Data/Val_FC_stalling.RData")
+load("../Data/Ile_FC_stalling.RData")
+load("../Data/Leu_FC_stalling.RData")
+```
+###VOLCANO PLOTS of foldchange EACH POSITION!
+```{r}
+library(ggplot2)
+library(dplyr)
+
+volcano <- function(dataframe, condition){
+filtered_data <- dataframe
+filtered_data <- filtered_data %>%
+  group_by(gene_symbol) %>%
+    mutate(mean_per_gene = mean(RPM_mean, na.rm = TRUE),
+    FC_relative_to_gene_mean = RPM_mean / mean_per_gene) %>%
+    ungroup()
+filtered_data <- filtered_data %>% 
+ mutate(
+    category = case_when(
+      RPM_pValue < 0.05 & norm_RPM_pValue < 0.05 & 
+      log2(FC_RPM) > 2 & log2(FC_RPM_norm) > 2 & 
+      FC_relative_to_gene_mean > 1 ~ "Up",
+      TRUE ~ "non_significant"
+    )
+  )
+
+total_up_count <- nrow(subset(filtered_data, category %in% c("Up")))
+ 
+# Create the volcano plot
+volcano_plot <- ggplot(filtered_data, aes(x = log2(FC_RPM_norm), y = -log10(norm_RPM_pValue))) +
+   geom_point(data = subset(filtered_data, category %in% c("non_significant")),
+             aes(), size = 1, shape = 16, alpha = 0.4, color="gray") +
+   geom_point(data = subset(filtered_data, category == "Up"),
+               aes(), size = 2, shape = 21, fill = "darkred", alpha = 0.1) +
+  labs(title = paste0("Ctrl vs. ", condition), x = "norm. RPM [log2FC]", y = "-Log10 p-value") +
+  theme_classic() +
+ theme(
+    plot.title = element_text(hjust = 0.5, family = "Arial", size = 14, color = "black"),
+    axis.title = element_text(family = "Arial", size = 14, color = "black"),
+    axis.text = element_text(family = "Arial", size = 14, color = "black"),
+    legend.position = "none"
+  ) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  geom_segment(aes(x = 2, xend = 2, y = 0, yend = 5), linetype = "dashed", color = "black") +
+  xlim(-7, 7) + ylim(0, 7) +
+  annotate("text", x = 3.5, y = 6, label = paste0("Positions: ", total_up_count), color = "darkred", family = "Arial", size = 4)
+  
+  png(paste0("../Figures/Volcano_", condition, ".png"), width = 3, height = 4, units = "in", res = 300)
+  print(volcano_plot)
+  dev.off()
+  
+#save(volcano_plot, file = paste0("../Figures/Volcano_", condition, ".RData"))
+
+return(volcano_plot)
+}
+
+volcano(Triple_FC_stalling, "Triple")
+volcano(Leu_FC_stalling, "Leu")
+volcano(Val_FC_stalling, "Val")
+volcano(Ile_FC_stalling, "Ile")
+volcano(Double_FC_stalling, "Double")
+
+```
+
+
+## Counts and ANALYZE POSITION AND GENE OVERLAP
+```{r}
+library(tools)
+load("../Data/Double_FC_stalling.RData")
+load("../Data/Triple_FC_stalling.RData")
+load("../Data/Val_FC_stalling.RData")
+load("../Data/Ile_FC_stalling.RData")
+load("../Data/Leu_FC_stalling.RData")
+
+df_names <- c("Triple_FC_stalling", "Double_FC_stalling", "Val_FC_stalling", "Ile_FC_stalling", "Leu_FC_stalling")
+
+for (df_name in df_names) {
+  df <- get(df_name)
+  df <- df %>%
+    group_by(gene_symbol) %>%
+    mutate(
+      mean_per_gene = mean(RPM_mean, na.rm = TRUE),
+      FC_relative_to_gene_mean = RPM_mean / mean_per_gene
+    ) %>%
+    ungroup() %>%
+    filter(
+      RPM_pValue < 0.05 & norm_RPM_pValue < 0.05 & 
+      log2(FC_RPM) > 2 & log2(FC_RPM_norm) > 2 & 
+      FC_relative_to_gene_mean > 1
+    ) %>%
+    mutate(name = paste(gene_symbol, position, codons, sep = "_"))
+  assign(df_name, df)
+}
+rm(df, df_name, df_names)
+
+####Counts
+data_list <- list(
+  Triple = Triple_FC_stalling,
+  Double = Double_FC_stalling,
+  Val = Val_FC_stalling,
+  Ile = Ile_FC_stalling,
+  Leu = Leu_FC_stalling
+)
+
+positions <- c()
+unique_genes <- c()
+for (name in names(data_list)) {
+  df <- data_list[[name]]
+  positions <- c(positions, nrow(df))
+  unique_genes <- c(unique_genes, length(unique(df$gene_symbol)))
+}
+
+Counts <- data.frame(
+  Condition = names(data_list),
+  Positions = positions,
+  Genes = unique_genes
+)
+
+library(reshape2)
+rownames(Counts) <- Counts$Condition
+Counts_long <- melt(Counts, variable.name = "Metric", value.name = "Count")
+
+Counts_long$Condition <- factor(rownames(Counts), levels = c("Leu", "Ile", "Val", "Double", "Triple"))
+
+Count <- ggplot(Counts_long, aes(x = Condition, y = Count, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") + 
+  labs(title = "Total Counts of Positions and Unique Genes per Condition",
+       x = "Condition",
+       y = "Count") +
+  theme_classic(base_family = "Arial", base_size = 14) +
+  theme(
+    axis.line = element_line(color = "black"),
+    axis.text.x = element_text(color = "black", size = 14, family = "Arial"),
+    axis.text.y = element_text(color = "black", size = 14, family = "Arial"),
+    axis.title.x = element_text(color = "black", size = 14, family = "Arial"),
+    axis.title.y = element_text(color = "black", size = 14, family = "Arial"),
+    plot.title = element_text(hjust = 0.5, color = "black", size = 14, family = "Arial"),
+    legend.text = element_text(color = "black", size = 14, family = "Arial"),
+    legend.title = element_text(color = "black", size = 14, family = "Arial")
+  ) +
+  geom_text(aes(label = Count, y = 0), 
+            position = position_dodge(width = 0.9), 
+            hjust = -0.1,          # Aligns the start of the rotated text with y = 0
+            angle = 90,
+            color = "white", 
+            family = "Arial",
+            size = 5) + 
+  scale_fill_manual(values = c("Positions" = "#008080", "Genes" = "#8B4513"))
+
+Count
+
+
+ggsave("../Figures/Stalling_Counts.tiff", Count, width = 6, height = 4)
+save(Count, file = "../Figures/Stalling_Counts.RData")
+
+## UPSETR PLOT
+library(ggvenn)
+library(ggplot2)
+
+data_gene <- list(Ile = Ile_FC_stalling$gene_symbol,Triple = Triple_FC_stalling$gene_symbol,Val = Val_FC_stalling$gene_symbol)
+data_position <- list(Ile = Ile_FC_stalling$name,Triple = Triple_FC_stalling$name, Val = Val_FC_stalling$name)
+
+library("ggVennDiagram")
+VennDiagram <- function(data, colors, svg_file, rdata_file) {
+  plot <- ggVennDiagram(data,
+              stroke_size = 0.5,
+              label_alpha = 0,
+              set_name_size = 7, 
+              show_percentage = FALSE) +
+              theme_void() +
+              theme(text = element_text(size = 13, color = "black", family = "Arial"),
+              legend.position = "none")+
+              ggplot2::scale_fill_gradient(low="white",high = colors)
+
+  ggsave(svg_file, plot, device = "tiff", width = 3, height = 4)
+  save(plot, file = rdata_file)
+}
+
+colors_position <- "#008080"  # Teal
+colors_genes <- "#8B4513"  # Saddle Brown
+
+VennDiagram(data_gene, colors = colors_genes, svg_file = "../Figures/VennDiagram_genes.tiff", rdata_file = "../Figures/VennDiagram_genes.RData")
+VennDiagram(data_position, colors = colors_position, svg_file = "../Figures/VennDiagram_positions.tiff",rdata_file = "../Figures/VennDiagram_positions.RData")
+```
+
+## Distribution of stalling sites along the CDS
+```{r}
+load(file="../../General_datasets/datatable_Riboseq_normalized.RData")
+
+load("../Data/Double_FC_stalling.RData")
+load("../Data/Triple_FC_stalling.RData")
+load("../Data/Val_FC_stalling.RData")
+load("../Data/Ile_FC_stalling.RData")
+load("../Data/Leu_FC_stalling.RData")
+
+ctrl_data <- data %>%
+  filter(condition == "CTRL", replicate == "1")%>%
+  select("position", "gene_symbol", "codons", "normalized_position")
+
+get_upregulated_positions <- function(data) {
+  data <- data %>% 
+  left_join(ctrl_data, by = c("position", "gene_symbol", "codons"))%>%
+    group_by(gene_symbol) %>%
+    mutate(mean_per_gene = mean(RPM_mean, na.rm = TRUE),
+    FC_relative_to_gene_mean = RPM_mean / mean_per_gene) %>%
+    ungroup() %>%
+    filter(RPM_pValue < 0.05 & norm_RPM_pValue < 0.05 & log2(FC_RPM) > 2 & log2(FC_RPM_norm) > 2  & FC_relative_to_gene_mean > 1) %>%
+    mutate(name = paste0(gene_symbol, ":", position))
+
+  stalling_distribution <- data %>%
+  group_by(normalized_position) %>%
+  summarize(count = n(), .groups = 'drop')%>%
+    filter(! normalized_position %in% c("0", "100"))
+  
+  meta_stalling <- ggplot(stalling_distribution, aes(x = normalized_position, y = count)) +
+  geom_smooth(color = "steelblue", fill = "lightblue", alpha = 0.5, span = 0.2) +
+  theme_classic(base_family = "Arial") +
+  #facet_wrap(~ codon_aa, scales = "free_y") +
+  labs(title = "Stalling along CDS",
+    x = "Position in CDS (%)",
+    y = "Stalling Count") +
+  scale_y_continuous(limits = c(0, NA)) +
+  theme(text = element_text(color = "black"),
+    axis.title = element_text(size = 14, face = "bold"),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    panel.border = element_rect(color = "black", fill = NA, size = 1),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+ return(list(filtered_data = data, plot = meta_stalling))
+}
+
+Val <- get_upregulated_positions(Val_FC_stalling)
+Val_stalling <- Val$filtered_data
+Val <- Val$plot
+
+Ile <- get_upregulated_positions(Ile_FC_stalling)
+Ile_stalling <- Ile$filtered_data
+Ile <- Ile$plot
+
+Leu <- get_upregulated_positions(Leu_FC_stalling)
+Leu_stalling <- Leu$filtered_data
+Leu <- Leu$plot
+
+Double <- get_upregulated_positions(Double_FC_stalling)
+Double_stalling <- Double$filtered_data
+Double <- Double$plot
+
+Triple <- get_upregulated_positions(Triple_FC_stalling)
+Triple_stalling <- Triple$filtered_data
+Triple <- Triple$plot
+
+val_data <- Val$data
+ile_data <- Ile$data
+leu_data <- Leu$data
+double_data <- Double$data
+triple_data <- Triple$data
+
+val_data$condition <- "Val"
+ile_data$condition <- "Ile"
+leu_data$condition <- "Leu"
+double_data$condition <- "Double"
+triple_data$condition <- "Triple"
+
+combined_data <- bind_rows(val_data, ile_data, leu_data, double_data, triple_data)
+
+meta_stalling_combined <- ggplot(combined_data, aes(x = normalized_position, y = count, color = condition, group = condition)) +
+  geom_smooth(aes(fill = condition), alpha = 0.5, span = 0.2) +
+  theme_classic(base_family = "Arial") +
+  labs(title = "Stalling along CDS for All Conditions",
+       x = "Position in CDS (%)",
+       y = "Stalling Count") +
+  scale_color_manual(values = c("Val" = "#FF7F00", "Ile" = "#377EB8", "Leu" = "#4DAF4A", "Double" = "purple", "Triple" = "red4")) +
+  scale_fill_manual(values = c("Val" = "peachpuff", "Ile" = "lightblue", "Leu" = "lightgreen", "Double" = "lavender", "Triple" = "pink")) +
+  theme(text = element_text(color = "black"),
+        axis.title = element_text(color = "black", size = 14),
+        axis.text = element_text(size = 14, color = "black"),
+        plot.title = element_text(size = 14, hjust = 0.5, color = "black"),
+        panel.border = element_rect(color = "black", fill = NA, size = 1),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+meta_stalling_combined
+
+ggsave("../Figures/Stalling_METAGENE.png", meta_stalling_combined, width = 6, height = 5)
+save(meta_stalling_combined, file = "../Figures/Stalling_METAGENE.RData")
+
+
+
+STALLING_genes <- list(
+  Val = unique(Val_stalling$gene_symbol),
+  Ile = unique(Ile_stalling$gene_symbol),
+  Triple = unique(Triple_stalling$gene_symbol),
+  Leu = unique(Leu_stalling$gene_symbol),
+  Double = unique(Double_stalling$gene_symbol)
+)
+
+save(STALLING_genes, file="../Data/STALLING_genes.RData" )
+
+STALLING_positions <- list(
+  Val = unique(Val_stalling$name),
+  Ile = unique(Ile_stalling$name),
+  Triple = unique(Triple_stalling$name),
+  Leu = unique(Leu_stalling$name),
+  Double = unique(Double_stalling$name)
+)
+
+save( STALLING_positions, file= "../Data/STALLING_positions.RData")
+
+```
+
+## Distribution of codons along the CDS: First 100 and last 100 positions
+```{r}
+filtered_data <- data %>%
+  filter(condition == "CTRL", replicate == "1")%>%
+  mutate(length = as.numeric(length)) %>%
+  filter(length >= 200)%>%
+  group_by(gene_symbol) %>%
+  filter((position >= 1 & position <= 100)|(position >= (length - 99) & position <= length)) %>%
+  ungroup()%>%
+  mutate(partial_position = if_else(position <= 100, position, 200-(length-position)))
+
+codon_distribution <- filtered_data %>%
+  group_by(codons, partial_position) %>%
+  summarize(count = n(), .groups = 'drop')
+
+codon_table <- data.frame(
+  codon = c("TTT", "TTC", "TTA", "TTG", "CTT", "CTC", "CTA", "CTG",
+            "ATT", "ATC", "ATA", "ATG", "GTT", "GTC", "GTA", "GTG",
+            "TCT", "TCC", "TCA", "TCG", "AGT", "AGC",
+            "CCT", "CCC", "CCA", "CCG",
+            "ACT", "ACC", "ACA", "ACG",
+            "GCT", "GCC", "GCA", "GCG",
+            "TAT", "TAC", "CAT", "CAC", "CAA", "CAG", "AAT", "AAC",
+            "AAA", "AAG", "GAT", "GAC", "GAA", "GAG",
+            "TGT", "TGC", "TGG",
+            "CGT", "CGC", "CGA", "CGG", "AGA", "AGG",
+            "GGT", "GGC", "GGA", "GGG",
+            "TAA", "TAG", "TGA"),
+  amino_acid = c("Phe", "Phe", "Leu", "Leu", "Leu", "Leu", "Leu", "Leu",
+                 "Ile", "Ile", "Ile", "Met", "Val", "Val", "Val", "Val",
+                 "Ser", "Ser", "Ser", "Ser", "Ser", "Ser",
+                 "Pro", "Pro", "Pro", "Pro",
+                 "Thr", "Thr", "Thr", "Thr",
+                 "Ala", "Ala", "Ala", "Ala",
+                 "Tyr", "Tyr", "His", "His", "Gln", "Gln", "Asn", "Asn",
+                 "Lys", "Lys", "Asp", "Asp", "Glu", "Glu",
+                 "Cys", "Cys", "Trp",
+                 "Arg", "Arg", "Arg", "Arg", "Arg", "Arg",
+                 "Gly", "Gly", "Gly", "Gly",
+                 "STOP", "STOP", "STOP")
+)
+codon_distribution <- codon_distribution %>%
+  left_join(codon_table, by = c("codons" = "codon"))%>%
+  mutate(codon_aa = paste0(amino_acid, ":", codons))%>%
+  mutate(region = if_else(partial_position <= 100, "First 100", "Last 100"))%>%
+  filter(!is.na(amino_acid))%>%
+  filter(!partial_position %in% c(1:5, 200))
+
+codon_distribution_filter <- codon_distribution %>%
+  group_by(codon_aa, region) %>%
+  filter(n() > 3) %>%
+  ungroup() %>%
+  filter(amino_acid %in% c("Val", "Ile"))
+
+meta_codons <- ggplot(codon_distribution_filter, aes(x = partial_position, y = count, color = region, group = region)) +
+  geom_smooth(aes(fill = region), alpha = 0.5) +
+  geom_vline(xintercept = 100, linetype = "dashed", color = "black") +
+  scale_color_manual(values = c("First 100" = "blue", "Last 100" = "red")) +
+  scale_fill_manual(values = c("First 100" = "lightblue", "Last 100" = "pink")) +
+  facet_wrap(~ codon_aa, scales = "free_y",ncol = 3) +
+  theme_classic(base_family = "Arial") +
+  labs(title = "Codon Frequency along CDS (First and last removed)",
+    x = "Position in CDS [nt]",
+    y = "Codon Occurrence Count") +
+  scale_x_continuous(breaks = c(0,100, 200),
+                     labels = c("Start","+/-100","Stop")) +
+  scale_y_continuous(limits = c(0, NA)) +
+  theme(text = element_text(color = "black"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 8, color = "black"),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    panel.border = element_rect(color = "black", fill = NA, size = 1),
+    panel.grid.major = element_line(color = "grey80", linetype = "dashed"),
+    panel.grid.minor = element_blank()
+  )
+
+meta_codons
+
+ggsave("../Figures/Codons_METAGENE.png", meta_codons, width = 8, height = 6)
+save(meta_codons, file = "../Figures/Codons_METAGENE.RData")
+```
+
+## Distance of first Val codon to Ile codon
+```{r}
+## FIRST POSITION OF VAL AND ILE CODONS
+ctrl_data <- data %>%
+  filter(condition == "CTRL", replicate == "1")%>%
+  select(codons, position, gene_symbol, length)
+
+val_codons <- c("GTT", "GTC", "GTA", "GTG")
+ile_codons <- c("ATT", "ATC", "ATA")
+
+polarity_scores_min <- ctrl_data %>%
+  filter(codons %in% c(val_codons, ile_codons)) %>%
+  group_by(gene_symbol) %>%
+  summarise(
+    min_val_position = ifelse(any(codons %in% val_codons), min(position[codons %in% val_codons], na.rm = TRUE), NA),
+    min_ile_position = ifelse(any(codons %in% ile_codons), min(position[codons %in% ile_codons], na.rm = TRUE), NA),
+    cds_length = unique(length),
+    polarity_score = (min_val_position - min_ile_position)/cds_length
+  ) %>%
+  ungroup()
+
+load("../Data/STALLING_genes.RData")
+
+Position_Val_Ile <- ggplot() +
+  geom_histogram(data = polarity_scores_min, aes(x = polarity_score), 
+                 binwidth = 0.015, fill = "gray", color = "black", alpha = 0.2) +
+  theme_minimal(base_family = "Arial") +
+  theme(
+    text = element_text(size = 14, color = "black"),  # Global text settings
+    axis.text = element_text(size = 14, color = "black"),  # Axis tick labels
+    axis.title = element_text(size = 14, color = "black"),  # Axis titles
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black"),  # Title centered
+    axis.line = element_line(color = "black"),  # Black axis lines
+    panel.grid = element_blank())+
+  labs(
+    title = "Distribution of Polarity Scores",
+    x = "Rel. distance first occurrence [Val-Ile]",
+    y = "Count") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black", size = 1)
+
+ggsave("../Figures/Position_Val_Ile.svg", Position_Val_Ile, width = 6, height = 4)
+save(Position_Val_Ile, file = "../Figures/Position_Val_Ile.RData")
+```
+
+
+## Stalling sites: Distance to closest and to FIRST other stalling site
+```{r}
+library(dplyr)
+library(ggplot2)
+library(pheatmap)
+library(tidyr)
+
+# Genes common to Ile, Triple, and Val
+GENES_Ile_Triple_Val <- intersect(STALLING_genes$Val, intersect(STALLING_genes$Triple, STALLING_genes$Ile))
+# Genes only in Val
+GENES_only_Val <- setdiff(STALLING_genes$Val, union(STALLING_genes$Ile, STALLING_genes$Triple))
+# Genes in both Val and Triple, but not in Ile
+GENES_Val_Triple <- setdiff(intersect(STALLING_genes$Val, STALLING_genes$Triple), STALLING_genes$Ile)
+# Genes in both Ile and Triple, but not in Val
+GENES_Ile_Triple <- setdiff(intersect(STALLING_genes$Ile, STALLING_genes$Triple), STALLING_genes$Val)
+
+
+# Filter stalling data for the genes of interest
+Val_stalling_filtered <- Val_stalling %>%
+  select(position, gene_symbol, normalized_position) %>%
+  filter(gene_symbol %in% GENES_Ile_Triple_Val)
+
+Ile_stalling_filtered <- Ile_stalling %>%
+  select(position, gene_symbol, normalized_position) %>%
+  filter(gene_symbol %in% GENES_Ile_Triple_Val)
+
+Triple_stalling_filtered <- Triple_stalling %>%
+  select(position, gene_symbol, normalized_position) %>%
+  filter(gene_symbol %in% GENES_Ile_Triple_Val)
+
+# Get the first (smallest position) stalling site in Val and Triple for each gene
+Val_first_stalling <- Val_stalling_filtered %>%
+  group_by(gene_symbol) %>%
+  summarise(first_position_Val = min(position))
+
+Triple_first_stalling <- Triple_stalling_filtered %>%
+  group_by(gene_symbol) %>%
+  summarise(first_position_Triple = min(position))
+
+#Ile_stalling_filtered <- Ile_stalling_filtered %>%
+#  group_by(gene_symbol)%>%
+#  slice_min(position, with_ties = FALSE) %>%
+#  ungroup()
+
+# Compute distances from Ile stalling sites to the first Val and Triple stalling sites
+Ile_first_distances <- Ile_stalling_filtered %>%
+  left_join(Val_first_stalling, by = "gene_symbol") %>%
+  left_join(Triple_first_stalling, by = "gene_symbol") %>%
+  mutate(
+    distance_to_first_Val = position - first_position_Val,
+    distance_to_first_Triple = position - first_position_Triple)
+
+Triple_first_distances <- Triple_stalling_filtered %>%
+  left_join(Val_first_stalling, by = "gene_symbol") %>%
+  left_join(Triple_first_stalling, by = "gene_symbol") %>%
+  mutate(
+    distance_to_first_Val = position - first_position_Val,
+    distance_to_first_Triple = position - first_position_Triple)
+
+
+
+# Histograms of distances to first stalling sites
+hist_Ile_to_first_Val_plot <- ggplot(Ile_first_distances, aes(x = distance_to_first_Val)) +
+  geom_histogram(binwidth = 300, fill = "#008080", color = "black") +
+  labs(title = "Histogram of Distances to First Val Stalling Site",
+       x = "Distance (Ile Position - First Val Position)",
+       y = "Frequency") +
+  theme_classic(base_family = "Arial", base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, color = "black", size = 14, family = "Arial"),
+    axis.title = element_text(color = "black", size = 14, family = "Arial"),
+    axis.text = element_text(color = "black", size = 14, family = "Arial")
+  )
+
+ggsave("../Figures/hist_Ile_to_first_Val_plot.png", plot = hist_Ile_to_first_Val_plot, width = 4, height = 5)
+
+hist_Ile_to_first_Triple_plot <- ggplot(Ile_first_distances, aes(x = distance_to_first_Triple)) +
+  geom_histogram(binwidth = 100, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Distances to First Triple Stalling Site",
+    x = "Distance (Ile Position - First Triple Position)",
+    y = "Frequency") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10))
+
+ggsave("../Figures/hist_Ile_to_first_Triple_plot.png", plot = hist_Ile_to_first_Triple_plot, width = 5, height = 5)
+
+hist_Triple_to_first_Val_plot <- ggplot(Triple_first_distances, aes(x = distance_to_first_Val)) +
+  geom_histogram(binwidth = 100, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Distances to First Val Stalling Site",
+    x = "Distance (Ile Position - First Val Position)",
+    y = "Frequency") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10))
+
+ggsave("../Figures/hist_Triple_to_first_Val_plot.png", plot = hist_Triple_to_first_Val_plot, width = 5, height = 5)
+
+# Statistical tests for distances to first stalling sites
+t_test_first_Val <- t.test(Ile_first_distances$distance_to_first_Val, alternative = "greater")
+print(t_test_first_Val)
+wilcox_test_first_Val <- wilcox.test(Ile_first_distances$distance_to_first_Val, alternative = "greater")
+print(wilcox_test_first_Val)
+
+t_test_first_Triple <- t.test(Ile_first_distances$distance_to_first_Triple, alternative = "greater")
+print(t_test_first_Triple)
+wilcox_test_first_Triple <- wilcox.test(Ile_first_distances$distance_to_first_Triple, alternative = "greater")
+print(wilcox_test_first_Triple)
+
+
+hist_Ile_to_first_Triple_plot
+hist_Ile_to_first_Val_plot
+hist_Triple_to_first_Val_plot 
+
+t_test_first_Triple
+t_test_first_Val
+
+save(hist_Ile_to_first_Triple_plot, file="../Figures/hist_Ile_to_first_Triple_plot.RData")
+save(hist_Ile_to_first_Val_plot, file="../Figures/hist_Ile_to_first_Val_plot.RData")
+```
+
+
+## Comparison of stalling with Proteome
+```{r}
+load("../Data/Double_FC_stalling.RData")
+load("../Data/Triple_FC_stalling.RData")
+load("../Data/Val_FC_stalling.RData")
+load("../Data/Ile_FC_stalling.RData")
+load("../Data/Leu_FC_stalling.RData")
+
+Double_FC_stalling <- Double_FC_stalling%>%
+  group_by(gene_symbol)%>%
+  mutate(FC_relative_to_gene_mean = RPM_mean / mean(RPM_mean, na.rm = TRUE)) %>%
+  ungroup()%>%
+  rename_with(.fn = ~ paste0("Double_", .), .cols = matches("^(RPM_|FC_|norm_)"))
+
+Triple_FC_stalling <- Triple_FC_stalling%>%
+  group_by(gene_symbol)%>%
+  mutate(FC_relative_to_gene_mean = RPM_mean / mean(RPM_mean, na.rm = TRUE)) %>%
+  ungroup()%>%
+  rename_with(.fn = ~ paste0("Triple_", .), .cols = matches("^(RPM_|FC_|norm_)"))
+Val_FC_stalling <- Val_FC_stalling%>%
+  group_by(gene_symbol)%>%
+  mutate(FC_relative_to_gene_mean = RPM_mean / mean(RPM_mean, na.rm = TRUE)) %>%
+  ungroup()%>%
+  rename_with(.fn = ~ paste0("Val_", .), .cols = matches("^(RPM_|FC_|norm_)"))
+Ile_FC_stalling <- Ile_FC_stalling%>%
+  group_by(gene_symbol)%>%
+  mutate(FC_relative_to_gene_mean = RPM_mean / mean(RPM_mean, na.rm = TRUE)) %>%
+  ungroup()%>%
+  rename_with(.fn = ~ paste0("Ile_", .), .cols = matches("^(RPM_|FC_|norm_)"))
+Leu_FC_stalling <- Leu_FC_stalling%>%
+  group_by(gene_symbol)%>%
+  mutate(FC_relative_to_gene_mean = RPM_mean / mean(RPM_mean, na.rm = TRUE)) %>%
+  ungroup()%>%
+  rename_with(.fn = ~ paste0("Leu_", .), .cols = matches("^(RPM_|FC_|norm_)"))
+
+fc_stalling_dfs <- list(Double_FC_stalling, Triple_FC_stalling, Val_FC_stalling, Ile_FC_stalling, Leu_FC_stalling)
+merged_FC_stalling <- purrr::reduce(fc_stalling_dfs, function(x, y) {
+  full_join(x, y, by = c("gene_symbol", "position", "codons", "ctrl_mean", "ctrl_mean_norm"))
+})
+
+load("../../General_datasets/log2FC_pValue.RData") 
+EdgeR_all <- EdgeR_all%>%
+  select(Gene, starts_with("RPF_"))
+load("../../General_datasets/Proteome_logFC.RData")
+Proteome_logFC <- Proteome_logFC
+
+EdgeR_Proteome <- merge(EdgeR_all, Proteome_logFC, by="Gene")
+ALL_merged <- merge(EdgeR_Proteome, merged_FC_stalling, by.x="Gene", by.y="gene_symbol")
+
+
+```
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Define conditions
+conditions <- c("Double", "Ile", "Leu", "Triple", "Val")
+
+# Calculate stalling status for each condition
+for (condition in conditions) {
+  ALL_merged <- ALL_merged %>%
+    mutate(
+      !!paste0("Stalling_", condition) := 
+        get(paste0(condition, "_RPM_pValue")) < 0.05 &
+        get(paste0(condition, "_norm_RPM_pValue")) < 0.05 &
+        log2(get(paste0(condition, "_FC_RPM"))) > 2 &
+        log2(get(paste0(condition, "_FC_RPM_norm"))) > 2 &
+        get(paste0(condition, "_FC_relative_to_gene_mean")) > 1
+    )
+}
+
+
+results_hyp <- lapply(conditions, function(condition) {
+  
+Amount_Proteins <- ALL_merged %>%
+   filter(!is.na(!!sym(paste0("Proteome_", condition, "_logFC")))&
+     !is.na(!!sym(paste0("Stalling_", condition)))
+     ) %>%
+   pull(Gene) %>% 
+   unique() %>%
+   length()
+
+Amount_Stalling_proteins <- ALL_merged %>%
+   filter(!is.na(!!sym(paste0("Proteome_", condition, "_logFC")))&
+     !is.na(!!sym(paste0("Stalling_", condition))) &
+      get(paste0("Stalling_",condition)) == TRUE
+     ) %>%
+   pull(Gene) %>% 
+   unique() %>%
+   length()
+
+total <- ALL_merged %>%
+   filter(
+     !is.na(get(paste0("Proteome_", condition, "_logFC")))&
+     !is.na(get(paste0("Stalling_", condition))) &
+      get(paste0("Proteome_",condition, "_PValue")) < 0.01 &
+      get(paste0("Proteome_",condition, "_logFC")) < -0.26
+     ) %>%
+   pull(Gene) %>% 
+   unique() %>%
+   length()
+  
+stalling <- ALL_merged %>%
+    filter(
+      !is.na(get(paste0("Proteome_", condition, "_logFC"))) &
+      !is.na(get(paste0("Stalling_", condition)))&
+      get(paste0("Proteome_",condition, "_PValue")) < 0.01 &
+      get(paste0("Proteome_",condition, "_logFC")) < -0.26 &
+      get(paste0("Stalling_", condition))
+    ) %>%
+    pull(Gene) %>%
+    unique() %>%
+    length()
+
+data.frame(
+    Condition = condition,
+    Total = Amount_Proteins,
+    Stalling = Amount_Stalling_proteins,
+    Total_down = total,
+    Stalling_down = stalling
+  )
+})
+
+results_df_hyp <- do.call(rbind, results_hyp)
+
+results_df_hyp$P_value <- apply(results_df_hyp, 1, function(row) {
+  q <- as.numeric(row["Stalling_down"]) - 1  
+  K <- as.numeric(row["Stalling"])           
+  N <- as.numeric(row["Total"])              
+  M <- as.numeric(row["Total_down"])        
+  p_val <- phyper(q, M, N - M, K, lower.tail = FALSE)
+  return(p_val)
+})
+
+
+
+
+
+
+
+# Calculate totals and stalling counts for each condition
+results <- lapply(conditions, function(condition) {
+
+total <- ALL_merged %>%
+   filter(
+     !is.na(get(paste0("Proteome_", condition, "_logFC")))&
+     !is.na(get(paste0("Stalling_", condition))) &
+      get(paste0("Proteome_",condition, "_PValue")) < 0.01 &
+      get(paste0("Proteome_",condition, "_logFC")) < -0.26
+     ) %>%
+   pull(Gene) %>% 
+   unique() %>%
+   length()
+  
+stalling <- ALL_merged %>%
+    filter(
+      !is.na(get(paste0("Proteome_", condition, "_logFC"))) &
+      !is.na(get(paste0("Stalling_", condition)))&
+      get(paste0("Proteome_",condition, "_PValue")) < 0.01 &
+      get(paste0("Proteome_",condition, "_logFC")) < -0.26 &
+      get(paste0("Stalling_", condition))
+    ) %>%
+    pull(Gene) %>%
+    unique() %>%
+    length()
+  
+stalling_with_rpf_DOWN <- ALL_merged %>%
+    filter(
+      !is.na(get(paste0("Proteome_", condition, "_logFC"))) &
+      !is.na(get(paste0("Stalling_", condition)))&
+      get(paste0("Proteome_",condition, "_PValue")) < 0.01 &
+      get(paste0("Proteome_",condition, "_logFC")) < -0.26 &
+      get(paste0("Stalling_", condition)) &
+      get(paste0("RPF_",condition, "_PValue")) < 0.05 &
+      get(paste0("RPF_",condition, "_logFC")) < 0
+    ) %>%
+    pull(Gene) %>%
+    unique() %>%
+    length()
+  
+data.frame(
+    Condition = condition,
+    Total = total,
+    Stalling = stalling,
+    NO_Stalling = total - stalling,
+    Stalling_with_RPF_DOWN = stalling_with_rpf_DOWN,
+    Stalling_without_RPF = stalling - stalling_with_rpf_DOWN
+  )
+})
+
+results_df <- do.call(rbind, results)
+
+# Calculate percentages
+results_df <- results_df %>%
+  mutate(
+    NOStalling_Percentage = (NO_Stalling / Total) * 100,
+    Stalling_with_RPF_DOWN_Percentage = (Stalling_with_RPF_DOWN / Total) * 100,
+    Stalling_without_RPF_Percentage = (Stalling_without_RPF / Total) * 100
+  )
+
+results_long <- results_df %>%
+  pivot_longer(
+    cols = c(Stalling_with_RPF_DOWN_Percentage, Stalling_without_RPF_Percentage, NOStalling_Percentage),
+    names_to = "Type",
+    values_to = "Percentage"
+  ) %>%
+  mutate(
+    Type = recode(
+      Type,
+      "Stalling_with_RPF_DOWN_Percentage" = "Stalling with Significant RPF Decrease",
+      "Stalling_without_RPF_Percentage" = "Stalling without Significant RPF Decrease"
+    )
+  )
+
+library(scales)
+Comparison_Proteome <- ggplot(results_long, aes(fill = Type, y = Percentage, x = Condition)) +
+  geom_bar(position = "stack", stat = "identity", color = "black", size = 0.5) +
+  geom_text(
+    aes(label = paste0(round(Percentage, 1), "%")),
+    position = position_stack(vjust = 0.5),
+    color = "white",
+    size = 4,
+    angle = 90) + 
+  scale_fill_manual(
+    values = c(
+      "Stalling with Significant RPF Decrease" = "#3D2B1F",
+      "Stalling without Significant RPF Decrease" = "#8B4513",
+      "NOStalling_Percentage" = "#999999")) +
+  labs(
+    x = "Condition",
+    y = "% of diff. proteins",
+    title = "",
+    fill = "Category") +
+  theme_classic() +
+  theme(
+    text = element_text(size = 14, color = "black", family = "Arial"),  
+    axis.title = element_text(), 
+    axis.text = element_text(size = 14, color = "black", family = "Arial"),
+    axis.text.x = element_text(angle = 90, size = 14, color = "black", family = "Arial"),
+    plot.title = element_text(hjust = 0.5, size = 14, color = "black", family = "Arial"), 
+    panel.grid.major = element_line(color = "gray90"),  
+    panel.grid.minor = element_blank(),  
+    legend.position = "top") +
+  scale_y_continuous(labels = percent_format(scale = 1))
+
+ggsave("../Figures/Comparison_Proteome.png", Comparison_Proteome, width = 3, height = 6)
+save(Comparison_Proteome, file="../Figures/Comparison_Proteome.RData")
+```
+### Amino acids around stalling sites##################################################################################################################################################################
+
+#Extract stalling positions per gene
+```{r}
+library(tibble)
+load("../Data/Double_FC_stalling.RData")
+load("../Data/Triple_FC_stalling.RData")
+load("../Data/Val_FC_stalling.RData")
+load("../Data/Ile_FC_stalling.RData")
+load("../Data/Leu_FC_stalling.RData")
+
+codon_to_aa <- data.frame(
+  codons = c('ATT', 'ATC', 'ATA', 'CTT', 'CTC', 'CTA', 'CTG', 'TTA', 'TTG', 'GTT', 'GTC', 'GTA', 'GTG',
+             'TTT', 'TTC', 'ATG', 'TGT', 'TGC', 'GCT', 'GCC', 'GCA', 'GCG', 'GGT', 'GGC', 'GGA', 'GGG',
+             'CCT', 'CCC', 'CCA', 'CCG', 'ACT', 'ACC', 'ACA', 'ACG', 'TCT', 'TCC', 'TCA', 'TCG', 'AGT',
+             'AGC', 'TAT', 'TAC', 'TGG', 'CAA', 'CAG', 'AAT', 'AAC', 'CAT', 'CAC', 'GAA', 'GAG', 'GAT',
+             'GAC', 'AAA', 'AAG', 'CGT', 'CGC', 'CGA', 'CGG', 'AGA', 'AGG', 'TAA', 'TAG', 'TGA'),
+  aa = c('I', 'I', 'I', 'L', 'L', 'L', 'L', 'L', 'L', 'V', 'V', 'V', 'V',
+         'F', 'F', 'M', 'C', 'C', 'A', 'A', 'A', 'A', 'G', 'G', 'G', 'G',
+         'P', 'P', 'P', 'P', 'T', 'T', 'T', 'T', 'S', 'S', 'S', 'S', 'S',
+         'S', 'Y', 'Y', 'W', 'Q', 'Q', 'N', 'N', 'H', 'H', 'E', 'E', 'D',
+         'D', 'K', 'K', 'R', 'R', 'R', 'R', 'R', 'R', 'STOP', 'STOP', 'STOP')
+)
+
+get_upregulated_positions <- function(data) {
+  data <- data %>%
+  left_join(codon_to_aa, by = "codons")
+  data <- data %>%
+    group_by(gene_symbol) %>%
+    mutate(FC_relative_to_gene_mean = RPM_mean/mean(RPM_mean, na.rm = TRUE)) %>%
+    ungroup() %>%
+    filter(is.finite(FC_RPM), is.finite(FC_RPM_norm), RPM_pValue < 0.05 & norm_RPM_pValue < 0.05 & log2(FC_RPM) > 2 & log2(FC_RPM_norm) > 2  & FC_relative_to_gene_mean > 1) %>%
+    mutate(id = paste(gene_symbol, position, sep = "_"))%>%
+    group_by(gene_symbol) %>%
+    summarise(positions = list(sort(unique(position)))) %>%
+    deframe()
+}
+
+Val <- get_upregulated_positions(Val_FC_stalling)
+Ile <- get_upregulated_positions(Ile_FC_stalling)
+Leu <- get_upregulated_positions(Leu_FC_stalling)
+Double <- get_upregulated_positions(Double_FC_stalling)
+Triple <- get_upregulated_positions(Triple_FC_stalling)
+```
+
+#Reconstruct CDS from count table
+```{r}
+load("../../General_datasets/datatable_Riboseq_normalized.RData")
+
+data <- data %>%
+  left_join(codon_to_aa, by = "codons")
+
+sample_data <- data %>%
+  filter(Sample == "Lina_CTRL_1_RIBO_NA")
+
+seq_data_cds_aa <- sample_data %>%
+  group_by(gene_symbol) %>%
+  arrange(position) %>%
+  summarise(cds = paste(aa, collapse = ""))
+
+seq_data_cds_codons <- sample_data %>%
+  group_by(gene_symbol) %>%
+  arrange(position) %>%
+  summarise(cds = paste(codons, collapse = ""))
+```
+```{r}
+plot_AA_distribution_in_stalling <- function(cond, AAs, cond2) {
+  
+  extract_motifs <- function(sequence, positions_up, flank_length1 = 6, flank_length2 = 4) {
+    motifs <- sapply(positions_up, function(pos) {
+      start <- max(1, ((pos + 2) / 3) - flank_length1)
+      end <- min(nchar(sequence), ((pos + 2) / 3) + flank_length2)
+      substring(sequence, start, end)
+    })
+    return(motifs)
+  }
+
+  all_motifs <- lapply(names(cond), function(gene) {
+    gene_seq <- seq_data_cds_aa$cds[seq_data_cds_aa$gene_symbol == gene]
+    extract_motifs(gene_seq, cond[[gene]])
+  })
+
+  names(all_motifs) <- names(cond)
+  motifs <- unlist(all_motifs)
+
+  peptide_data <- data.frame(peptide = unlist(all_motifs)) %>%
+    filter(nchar(peptide) == 11)
+
+  # Count peptides with and without the specified AAs
+  peptide_summary <- lapply(AAs, function(AA) {
+    peptides_with <- peptide_data %>%
+      filter(grepl(AA, peptide)) %>%
+      nrow()
+    peptides_without <- peptide_data %>%
+      filter(!grepl(AA, peptide)) %>%
+      nrow()
+    data.frame(
+      AminoAcid = AA,
+      Category = c("With", "Without"),
+      Count = c(peptides_with, peptides_without)
+    )
+  })
+
+  peptide_summary <- bind_rows(peptide_summary)
+
+  # Transform peptide_data to long format for AA distribution
+  peptide_data_long <- peptide_data %>%
+    mutate(peptide_id = row_number()) %>%
+    separate(peptide, into = paste0("Position_", 0:11), sep = "") %>%
+    select(!Position_0) %>%
+    pivot_longer(cols = starts_with("Position_"), names_to = "Position", values_to = "AminoAcid") %>%
+    mutate(Position = as.numeric(gsub("Position_", "", Position)))
+
+  # Create data for all specified AAs
+  AA_counts_list <- lapply(AAs, function(AA) {
+    peptide_data_long %>%
+      filter(AminoAcid == AA) %>%
+      group_by(Position) %>%
+      summarise(Count = n()) %>%
+      mutate(AminoAcid = AA)  # Add the AA as an identifier
+  })
+
+  AA_counts <- bind_rows(AA_counts_list)
+
+  # Create individual pie charts for each AA
+pie_grobs <- lapply(AAs, function(AA) {
+  pie_data <- peptide_summary %>%
+    filter(AminoAcid == AA) %>%
+    mutate(
+      Percentage = round((Count / sum(Count)) * 100, 1),  # Calculate percentage
+      Label = paste0(Percentage, "%")  # Create label for annotation
+    )
+  
+  pie_chart <- ggplot(pie_data, aes(x = "", y = Count, fill = Category)) +
+    geom_bar(width = 1, stat = "identity", color = "black") +
+    coord_polar(theta = "y") +
+#    geom_text(
+#      aes(label = Label),
+#      position = position_stack(vjust = 0.5),
+#      color = "black",
+#      size = 3.5
+#    ) +  # Add percentage annotation
+    scale_fill_manual(
+      values = c(
+        "With" = ifelse(AA == "V", "#FF7F00", "#377eB8"),  # Val -> skyblue, Ile -> orange
+        "Without" = "darkgray"  # Common color for "Without"
+      )
+    ) +
+    theme_void() +
+    theme(
+      legend.position = "none",
+      plot.title = element_text(hjust = 0.5, size = 10)
+    ) +
+    labs(title = paste(AA, "Peptides"))
+  
+  ggplotGrob(pie_chart)
+})
+
+  # Overlay plot for all AAs
+  counts <- ggplot(AA_counts, aes(x = Position, y = Count, fill = AminoAcid)) +
+    geom_bar(aes(color = Position == 7), stat = "identity", position = position_dodge(width = 0.7), size = 0.7, show.legend = TRUE) +
+    scale_fill_manual(values = c("V" = "#FF7F00", "I"="#377eB8")) +
+    scale_color_manual(values = c("TRUE" = "black", "FALSE" = NA), guide = "none") +
+    labs(title = paste0("AA Distribution Around Stalling Sites in ", cond2, " Starvation"),
+         x = "Position in Peptide Sequence",
+         y = "Count of AA",
+         fill = "Amino Acid") +
+    scale_x_continuous(
+      breaks = unique(AA_counts$Position),  # Ensure all positions are labeled
+      labels = c("-4", "-3","-2", "-1", "E-site", "P-site", "A-site", "+1", "+2", "+3", "+4")  # Custom labels
+    ) +
+    theme_classic(base_family = "Arial") +  # Set the base font to Arial
+    theme(
+  text = element_text(color = "black", family = "Arial", size = 14),  # Global text settings
+  axis.title = element_text(color = "black", family = "Arial", size = 14),  # Axis titles
+  axis.text = element_text(color = "black", family = "Arial", size = 14),  # Axis text
+   axis.text.x = element_text(angle=90, color = "black", family = "Arial", size = 14),  # Axis text
+  axis.line = element_line(color = "black"),  # Black axis lines
+  axis.ticks = element_line(color = "black"),  # Black axis ticks
+  legend.text = element_text(color = "black", family = "Arial", size = 14),  # Legend text
+  legend.title = element_text(color = "black", family = "Arial", size = 14),  # Legend title
+  plot.title = element_blank(),
+  panel.background = element_blank(),  # Ensures a clean background
+  panel.grid = element_blank(),  # Removes gridlines
+  legend.position = "right"  # Moves legend to the top
+)
+
+  # Add pie charts to the bar plot
+  counts +
+    annotation_custom(pie_grobs[[1]], xmin = 7, xmax = 9.5, ymin = max(AA_counts$Count) * 0.5, ymax = max(AA_counts$Count)) +
+    annotation_custom(pie_grobs[[2]], xmin = 9, xmax = 11.5, ymin = max(AA_counts$Count) * 0.5, ymax = max(AA_counts$Count))
+}
+
+# Example usage:
+Val_starvation_distribution <- plot_AA_distribution_in_stalling(Val, c("V", "I"), "Val")
+Ile_starvation_distribution <- plot_AA_distribution_in_stalling(Ile, c("V", "I"), "Ile")
+Triple_starvation_distribution <- plot_AA_distribution_in_stalling(Triple, c("V", "I"), "Triple")
+
+ggsave("../Figures/Val_starvation_distribution.png", Val_starvation_distribution, width = 6, height = 3)
+save(Val_starvation_distribution, file="../Figures/Val_starvation_distribution.RData")
+
+ggsave("../Figures/Ile_starvation_distribution.png", Ile_starvation_distribution, width = 6, height = 3)
+save(Ile_starvation_distribution, file="../Figures/Ile_starvation_distribution.RData")
+
+ggsave("../Figures/Triple_starvation_distribution.png", Triple_starvation_distribution, width = 6, height = 3)
+save(Triple_starvation_distribution, file="../Figures/Triple_starvation_distribution.RData")
+
+```
+
+
+```{r}
+# Load necessary libraries
+library(Biostrings)
+library(ggplot2)
+library(dplyr)
+
+analyze_stalling <- function(condition, condition_name, test_codons, test_codons_name, heatmap_width = 8, heatmap_height = 6) {
+  
+# Extract nucleotide motifs
+  extract_nuc_motifs <- function(sequence, positions_up, flank_length = 10) {
+    motifs <- sapply(positions_up, function(pos) {
+      start <- max(1, pos - flank_length)
+      end <- min(nchar(sequence), pos + flank_length)
+      substring(sequence, start, end)
+    })
+    return(motifs)
+  }
+  
+  # Extract nucleotide motifs for each gene
+  all_motifs <- lapply(names(condition), function(gene) {
+    gene_seq <- seq_data_cds_codons$cds[seq_data_cds_codons$gene_symbol == gene]
+    extract_nuc_motifs(gene_seq, condition[[gene]])
+  })
+  names(all_motifs) <- names(condition)
+  motifs <- unlist(all_motifs)
+  
+  # Ensure all motifs are of the same length
+  sequence_lengths <- nchar(motifs)
+  max_length <- max(sequence_lengths)
+  motifs <- motifs[sequence_lengths == max_length]
+  
+  codon_table <- data.frame(
+      codon = c("TTT", "TTC", "TTA", "TTG", "CTT", "CTC", "CTA", "CTG",
+                "ATT", "ATC", "ATA", "ATG", "GTT", "GTC", "GTA", "GTG",
+                "TCT", "TCC", "TCA", "TCG", "AGT", "AGC",
+                "CCT", "CCC", "CCA", "CCG",
+                "ACT", "ACC", "ACA", "ACG",
+                "GCT", "GCC", "GCA", "GCG",
+                "TAT", "TAC", "CAT", "CAC", "CAA", "CAG", "AAT", "AAC",
+                "AAA", "AAG", "GAT", "GAC", "GAA", "GAG",
+                "TGT", "TGC", "TGG",
+                "CGT", "CGC", "CGA", "CGG", "AGA", "AGG",
+                "GGT", "GGC", "GGA", "GGG",
+                "TAA", "TAG", "TGA"),
+      amino_acid = c("F", "F", "L", "L", "L", "L", "L", "L",
+                     "I", "I", "I", "M", "V", "V", "V", "V",
+                     "S", "S", "S", "S", "S", "S",
+                     "P", "P", "P", "P",
+                     "T", "T", "T", "T",
+                     "A", "A", "A", "A",
+                     "Y", "Y", "H", "H", "Q", "Q", "N", "N",
+                     "K", "K", "D", "D", "E", "E",
+                     "C", "C", "W",
+                     "R", "R", "R", "R", "R", "R",
+                     "G", "G", "G", "G",
+                     "Stop", "Stop", "Stop")
+    )
+
+  
+  # Create motif data frame
+  motif_df <- data.frame(motif = motifs, stringsAsFactors = FALSE)
+  motif_df <- motif_df %>%
+    mutate(
+      seq_2_4 = substr(motif, 2, 4),
+      seq_5_7 = substr(motif, 5, 7),
+      seq_8_10 = substr(motif, 8, 10),
+      codon_11_13 = substr(motif, 11, 13)
+    )
+  
+  # Check for test codons at specified positions
+  motif_df <- motif_df %>%
+    mutate(
+      codon_in_2_4 = seq_2_4 %in% test_codons,
+      codon_in_5_7 = seq_5_7 %in% test_codons,
+      codon_in_8_10 = seq_8_10 %in% test_codons,
+      codon_in_any = codon_in_2_4 | codon_in_5_7 | codon_in_8_10)
+  
+  # Initialize list for codon counts
+  codon_counts_list <- list()
+  
+  positions <- c("2_4", "5_7", "8_10", "any")
+  for (pos in positions) {
+    codon_col <- paste0("codon_in_", pos)
+    motifs_with_codon <- motif_df %>% filter(.data[[codon_col]] == TRUE)
+    codons <- motifs_with_codon$codon_11_13
+    codon_counts <- table(codons)
+    codon_counts_list[[pos]] <- codon_counts
+  }
+  
+  # Combine counts into data frame
+  counts_df <- lapply(names(codon_counts_list), function(pos) {
+    counts <- as.data.frame(codon_counts_list[[pos]])
+    counts$position <- pos
+    counts
+  }) %>% bind_rows()
+  
+  colnames(counts_df) <- c("codon", "count", "position")
+  
+  # Merge with codon table and arrange order
+  total_counts <- counts_df %>%
+    left_join(codon_table, by = c("codon" = "codon")) %>%
+    mutate(name = paste0(codon, ":", amino_acid)) %>%
+    group_by(name) %>%
+    summarise(total_count = sum(count)) %>%
+    arrange(desc(total_count))
+  
+
+  counts_df <- counts_df %>%
+    left_join(codon_table, by = c("codon" = "codon"))%>%
+    mutate(name = paste0(codon, ":", amino_acid))
+  
+ counts_df$name <- sub("T(?=[^:]*:)", "U", counts_df$name, perl = TRUE)
+ total_counts$name <- sub("T(?=[^:]*:)", "U", total_counts$name, perl = TRUE)
+  
+  # Set factor levels for correct ordering
+  codon_order <- total_counts$name
+  counts_df$name <- factor(counts_df$name, levels = codon_order)
+  
+  counts_df <- counts_df %>%
+    filter(position == "any")
+  
+  # Create heatmap
+  heat <- ggplot(counts_df, aes(x = name, y = position, fill = count)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient(low = "white", high = "darkred") +
+    labs(title = paste0("Codon Counts at Positions 11-13 when ", test_codons_name, " Codon is Present in ", condition_name),
+         x = "Codon at Positions 11-13",
+         y = paste0(test_codons_name, " Codon at Position"),
+         fill = "Count") +
+    theme_classic() +
+    theme(
+      text = element_text(family = "Arial", color = "black"),
+      axis.text = element_text(color = "black"),
+      axis.title = element_text(color = "black"),
+      plot.title = element_text(size = 14, face = "bold", color = "black"),
+      axis.line = element_line(color = "black"),
+      axis.ticks = element_line(color = "black"),
+      axis.text.x = element_text(angle = 90, hjust = 1)
+    )
+  
+  return(heat)
+}
+
+
+ile_codons <- c("ATT", "ATC", "ATA")
+val_codons <- c("GTT", "GTC", "GTA", "GTG")
+
+
+heatmap_ile <- analyze_stalling(Ile, "Ile", ile_codons, "Ile", heatmap_width = 8, heatmap_height = 2)
+heatmap_triple_ile <- analyze_stalling(Triple, "Triple", ile_codons, "Ile", heatmap_width = 8, heatmap_height = 2)
+
+##########################################################################################################################################
+# Generate heatmaps for Val codons
+heatmap_val <- analyze_stalling(Val, "Val", val_codons, "Val", heatmap_width = 8, heatmap_height = 2)
+heatmap_ile_val <- analyze_stalling(Ile, "Ile", val_codons, "Val", heatmap_width = 8, heatmap_height = 2)
+heatmap_triple_val <- analyze_stalling(Triple, "Triple", val_codons, "Val", heatmap_width = 8, heatmap_height = 2)
+
+ggsave("../Figures/heatmap_stalling_relative_VAL.png", heatmap_val, width = 9, height = 2)
+ggsave("../Figures/heatmap_stalling_relative_ILE.png", heatmap_ile, width = 9, height = 2)
+
+
+datasets <- list(
+  heatmap_triple_val$data %>% rename(Triple = count),
+  heatmap_val$data %>% rename(Val = count),
+  heatmap_ile$data %>% rename(Ile = count))
+
+stalling_relative_Val <- reduce(datasets, full_join, by = c("name", "codon", "amino_acid", "position"))
+
+stalling_relative_Val <- stalling_relative_Val %>%
+  select(-position, -codon, -amino_acid) %>%  # Remove unnecessary columns
+  pivot_longer(
+    cols = c(Val, Ile, Triple),  # Pivot into long format
+    names_to = "Starvation",     # Column for the starvation condition
+    values_to = "Count"          # Column for the count values
+  ) %>%
+  group_by(Starvation) %>%  # Group by starvation condition
+  mutate(Total = sum(Count, na.rm = TRUE),  # Calculate total counts per condition
+         Normalized_Count = Count / Total) %>%  # Normalize counts
+  ungroup()  
+
+
+ heat_Val <- ggplot(stalling_relative_Val, aes(x = name, y = Starvation, fill = Normalized_Count)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient(low = "white", high = "darkred") +
+    labs(x = "Codon at stalling site",
+         y = "Starvation",
+         fill = "Count") +
+    theme_classic() +
+    theme(
+      text = element_text(family = "Arial", color = "black"),
+      axis.text = element_text(color = "black"),
+      axis.title = element_text(color = "black"),
+      plot.title = element_text(size = 14, face = "bold", color = "black"),
+      axis.line = element_line(color = "black"),
+      axis.ticks = element_line(color = "black"),
+      axis.text.x = element_text(angle = 90, hjust = 1)
+    )
+ heat_Val
+ ggsave("../Figures/heatmap_stalling_relative_VAL.png", heat_Val, width = 9, height = 2)
+ save(heat_Val, file="../Figures/heatmap_stalling_relative_VAL.RData")
+###################################################################################################################################################################### 
+# Generate heatmaps for Ile codons
+heatmap_val_ile <- analyze_stalling(Val, "Val", ile_codons, "Ile", heatmap_width = 8, heatmap_height = 2)
+heatmap_ile <- analyze_stalling(Ile, "Ile", ile_codons, "Ile", heatmap_width = 8, heatmap_height = 2)
+heatmap_triple_ile <- analyze_stalling(Triple, "Triple", ile_codons, "Ile", heatmap_width = 8, heatmap_height = 2)
+
+datasets <- list(
+  heatmap_triple_ile$data %>% rename(Triple = count),
+  heatmap_val_ile$data %>% rename(Val = count),
+  heatmap_ile$data %>% rename(Ile = count))
+
+stalling_relative_Ile <- reduce(datasets, full_join, by = c("name", "codon", "amino_acid", "position"))
+
+stalling_relative_Ile <- stalling_relative_Ile %>%
+  select(-position, -codon, -amino_acid) %>%  # Remove unnecessary columns
+  pivot_longer(
+    cols = c(Val, Ile, Triple),  # Pivot into long format
+    names_to = "Starvation",     # Column for the starvation condition
+    values_to = "Count"          # Column for the count values
+  ) %>%
+  group_by(Starvation) %>%  # Group by starvation condition
+  mutate(Total = sum(Count, na.rm = TRUE),  # Calculate total counts per condition
+         Normalized_Count = Count / Total) %>%  # Normalize counts
+  ungroup()  
+
+
+ heat_Ile <- ggplot(stalling_relative_Ile, aes(x = name, y = Starvation, fill = Normalized_Count)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient(low = "white", high = "darkred") +
+    labs(x = "Codon at stalling site",
+         y = "Starvation",
+         fill = "Count") +
+    theme_classic() +
+    theme(
+      text = element_text(family = "Arial", color = "black"),
+      axis.text = element_text(color = "black"),
+      axis.title = element_text(color = "black"),
+      plot.title = element_text(size = 14, face = "bold", color = "black"),
+      axis.line = element_line(color = "black"),
+      axis.ticks = element_line(color = "black"),
+      axis.text.x = element_text(angle = 90, hjust = 1)
+    )
+ heat_Ile
+ ggsave("../Figures/heatmap_stalling_relative_ILE.png", heat_Ile, width = 9, height = 2)
+ save(heat_Ile, file="../Figures/heatmap_stalling_relative_ILE.RData")
+```
+
+
+###### COMPARISON
+
+```{r}
+### CODON FREQUENCIES
+
+library(readxl)
+load(file="../../General_datasets/datatable_Riboseq_normalized.RData")
+codons <- read_excel("../../General_datasets/codon_counts_LNorm_mouse.xlsx")
+
+data$codons <- gsub("T", "U", data$codons)
+colnames(codons) <- gsub("T", "U", colnames(codons))
+
+codon_frequency <- codons %>%
+  filter(Gene %in% data$gene_symbol)%>%
+  select(-Gene) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))%>%
+  pivot_longer(cols = everything(), names_to = "Codon", values_to = "Frequency")
+
+val_codons <- c("GUA", "GUC", "GUG", "GUU")
+ile_codons <- c("AUA", "AUC", "AUU")
+leu_codons <- c("CUA", "CUC", "CUG", "CUU", "UUA", "UUG")
+
+codon_frequency <- codon_frequency %>%
+  mutate(Type = case_when(
+    Codon %in% val_codons ~ "Val",
+    Codon %in% ile_codons ~ "Ile",
+    Codon %in% leu_codons ~ "Leu",
+    TRUE ~ "Other"
+  ))
+
+
+Amino <- heatmap_val$data %>%
+  mutate(Total= sum(count),
+         nCount= count/Total)
+
+Amino$codon <- gsub("T", "U", Amino$codon)
+
+Amino <- merge(Amino, codon_frequency, by.x="codon", by.y ="Codon")
+
+dwell_filtered <- dwell_filtered%>%
+  mutate(DTs = CTRL)%>%
+  select(codon, DTs)
+
+Amino <- merge(Amino, dwell_filtered, by="codon")
+Amino <- Amino%>%
+  mutate(Ratio_Freq = nCount/Frequency)
+
+lm_model <- lm(DTs ~ Ratio_Freq, data = Amino)
+summary_model <- summary(lm_model)
+R_square <- summary_model$r.squared
+p_Value <- summary_model$coefficients[2,4]
+label_text <- bquote("R"^2 == .(round(R_square, 3)) ~ "| "* "p-value =" ~ .(format(signif(p_Value, digits = 3), scientific = TRUE)))
+
+# Create the scatter plot
+scatter_DT_Codon_frequencies <- ggplot(Amino, aes(x = DTs, y =Ratio_Freq)) +
+  geom_point(aes(fill = Type, size = ifelse(Type %in% c("Val", "Ile", "Leu"), 3, 1)), shape = 21) +
+  scale_fill_manual(values = c("Val" = "#FF7F00", "Ile" = "#377EB8", "Leu" = "#4DAF4A", "Other" = "black")) +
+  scale_size_identity() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.background = element_rect(fill = "transparent", colour = NA),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_blank(),
+    legend.position = "right") +
+  labs(
+    title = "Dwell times vs. codon frequency",
+    x = "DTs" ,
+    y = "Δ Frequency (Stalling site/Genome-wide)",
+    fill = "Codon")+
+  geom_text_repel(
+    data = subset(Amino, nCount > 1.5 * Frequency),
+    aes(label = name),
+    size = 5,
+    box.padding = 0.5,
+    point.padding = 0.3,
+    segment.color = "black"
+  )
+
+scatter_DT_Codon_frequencies
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Log2FC of stalling and no stalling genes
+```{r}
+log2FC_pValue <- read_excel("../0. General Data/log2FC_pValue.xlsx")
+log2FC_pValue <- log2FC_pValue %>%
+  filter(Gene %in% data$gene_symbol)
+
+generate_plot <- function(list_col, value_col, title) {
+  stalling <- log2FC_pValue %>%
+    filter(Gene %in% list_col) %>%
+    dplyr::select(stalling = all_of(value_col))
+  NOstalling <- log2FC_pValue %>%
+    filter(!Gene %in% list_col) %>%
+    dplyr::select(NOstalling = all_of(value_col))
+
+  max_length <- max(nrow(stalling), nrow(NOstalling))
+  stalling <- stalling %>%
+    add_row(stalling = rep(NA, max_length - nrow(stalling)))
+  NOstalling <- NOstalling %>%
+    add_row(NOstalling = rep(NA, max_length - nrow(NOstalling)))
+
+  result_df <- data.frame(NOstalling, stalling)
+  result_long <- melt(result_df, variable.name = "Status", value.name = "logFC")
+
+  # Perform t-test
+  t_test_result <- t.test(stalling$stalling, NOstalling$NOstalling, na.rm = TRUE)
+  p_value <- t_test_result$p.value
+
+  p <- ggplot(result_long, aes(x = logFC, color = Status)) +
+    stat_ecdf(geom = "step", size = 1) +
+    theme_classic(base_size = 12) +
+    labs(title = title, x = "log2FC", y = "Cumulative Fraction") +
+    scale_color_brewer(palette = "Set1") + 
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 12, color = "black"), 
+      axis.text.y = element_text(size = 12, color = "black"),
+      legend.position = "right",
+      legend.direction = "vertical",
+      text = element_text(color = "black"),
+      plot.title = element_text(size = 12, color = "black")
+    ) +
+    ylim(c(0, 1)) +
+    coord_cartesian(xlim = c(-0.8, 0.8)) +
+    geom_text(aes(x = 0.2, y = 0.1, label = paste("p =", format(p_value, scientific = TRUE, digits = 3))), color = "black")
+
+  return(p)
+  print(p)
+}
+
+plot_TE_Val <- generate_plot(list$Val, "TE_Val_logFC", "TE Val starvation")
+plot_RPF_Val <- generate_plot(list$Val, "RPF_Val_logFC", "RPF Val starvation")
+plot_RNA_Val <- generate_plot(list$Val, "RNA_Val_logFC", "RNA Val starvation")
+
+plot_TE_Ile <- generate_plot(list$Ile, "TE_Ile_logFC", "TE Ile starvation")
+plot_RPF_Ile <- generate_plot(list$Ile, "RPF_Ile_logFC", "RPF Ile starvation")
+plot_RNA_Ile <- generate_plot(list$Ile, "RNA_Ile_logFC", "RNA Ile starvation")
+
+plot_TE_Leu <- generate_plot(list$Leu, "TE_Leu_logFC", "TE Leu starvation")
+plot_RPF_Leu <- generate_plot(list$Leu, "RPF_Leu_logFC", "RPF Leu starvation")
+plot_RNA_Leu <- generate_plot(list$Leu, "RNA_Leu_logFC", "RNA Leu starvation")
+
+plot_TE_Leu
+plot_RNA_Leu
+plot_RPF_Leu
+
+plot_TE_Triple <- generate_plot(list$Triple, "TE_Triple_logFC", "TE Triple starvation")
+plot_RPF_Triple <- generate_plot(list$Triple, "RPF_Triple_logFC", "RPF Triple starvation")
+plot_RNA_Triple <- generate_plot(list$Triple, "RNA_Triple_logFC", "RNA Triple starvation")
+
+plot_TE_Triple
+plot_RNA_Triple
+plot_RPF_Triple
+
+plot_TE_Double <- generate_plot(list$Double, "TE_Double_logFC", "TE Double starvation")
+plot_RPF_Double <- generate_plot(list$Double, "RPF_Double_logFC", "RPF Double starvation")
+plot_RNA_Double <- generate_plot(list$Double, "RNA_Double_logFC", "RNA Double starvation")
+
+plot_TE_Double
+plot_RNA_Double
+plot_RPF_Double
+
+plot_TE_Ile
+plot_TE_Val
+plot_RNA_Ile
+plot_RNA_Val
+plot_RPF_Ile
+plot_RPF_Val
+
+library(gridExtra)
+
+# Arrange TE plots
+figure_TE <- arrangeGrob(
+  plot_TE_Leu,
+  plot_TE_Ile,
+  plot_TE_Val,
+  plot_TE_Double,
+  plot_TE_Triple,
+  ncol = 5
+)
+
+# Arrange RNA plots
+figure_RNA <- arrangeGrob(
+  plot_RNA_Leu,
+  plot_RNA_Ile,
+  plot_RNA_Val,
+  plot_RNA_Double,
+  plot_RNA_Triple,
+  ncol = 5
+)
+
+# Arrange RPF plots
+figure_RPF <- arrangeGrob(
+  plot_RPF_Leu,
+  plot_RPF_Ile,
+  plot_RPF_Val,
+  plot_RPF_Double,
+  plot_RPF_Triple,
+  ncol = 5
+)
+
+
+ggsave("./Features/TE_plots.png", figure_TE, width = 20, height = 3)
+ggsave("./Features/RNA_plots.png", figure_RNA, width = 20, height = 3)
+ggsave("./Features/RPF_plots.png", figure_RPF, width = 20, height = 3)
+
+
+## CPM of control######################################################################################
+
+log2CPMs <- read_excel("../0. General Data/log2CPMs.xlsx")
+log2CPMs <- log2CPMs %>%
+  filter(gene_symbol %in% data$gene_symbol)%>%
+  rowwise() %>%
+  mutate(
+    RNA_mean = mean(c_across(starts_with("RNA_CTRL")), na.rm = TRUE),
+    RPF_mean = mean(c_across(starts_with("RPF_CTRL")), na.rm = TRUE),
+    TE_mean = mean(c_across(starts_with("TE_CTRL")), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+generate_plot <- function(list_col, value_col, title) {
+  stalling <- log2CPMs %>%
+    filter(gene_symbol %in% list_col) %>%
+    dplyr::select(stalling = all_of(value_col))
+  NOstalling <- log2CPMs %>%
+    filter(!gene_symbol %in% list_col) %>%
+    dplyr::select(NOstalling = all_of(value_col))
+
+  max_length <- max(nrow(stalling), nrow(NOstalling))
+  stalling <- stalling %>%
+    add_row(stalling = rep(NA, max_length - nrow(stalling)))
+  NOstalling <- NOstalling %>%
+    add_row(NOstalling = rep(NA, max_length - nrow(NOstalling)))
+
+  result_df <- data.frame(NOstalling, stalling)
+  result_long <- melt(result_df, variable.name = "Status", value.name = "mean")
+
+  # Perform t-test
+  t_test_result <- t.test(stalling$stalling, NOstalling$NOstalling, na.rm = TRUE)
+  p_value <- t_test_result$p.value
+
+  p <- ggplot(result_long, aes(x = mean, color = Status)) +
+    stat_ecdf(geom = "step", size = 1) +
+    theme_classic(base_size = 12) +
+    labs(title = title, x = "mean cpm Ctrl", y = "Cumulative Fraction") +
+    scale_color_brewer(palette = "Set1") + 
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 12, color = "black"), 
+      axis.text.y = element_text(size = 12, color = "black"),
+      legend.position = "right",
+      legend.direction = "vertical",
+      text = element_text(color = "black"),
+      plot.title = element_text(size = 12, color = "black")
+    ) +
+    ylim(c(0, 1)) +
+   # coord_cartesian(xlim = c(-2, 2)) +
+    geom_text(aes(x = 7, y = 0.1, label = paste("p =", format(p_value, scientific = TRUE, digits = 3))), color = "black")
+
+  return(p)
+  print(p)
+}
+
+plot_TE_Val <- generate_plot(list$Val, "TE_mean", "TE Val starvation")
+plot_RPF_Val <- generate_plot(list$Val, "RPF_mean", "RPF Val starvation")
+plot_RNA_Val <- generate_plot(list$Val, "RNA_mean", "RNA Val starvation")
+
+plot_TE_Ile <- generate_plot(list$Ile, "TE_mean", "TE Ile starvation")
+plot_RPF_Ile <- generate_plot(list$Ile, "RPF_mean", "RPF Ile starvation")
+plot_RNA_Ile <- generate_plot(list$Ile, "RNA_mean", "RNA Ile starvation")
+
+plot_TE_Leu <- generate_plot(list$Leu, "TE_mean", "TE Leu starvation")
+plot_RPF_Leu <- generate_plot(list$Leu, "RPF_mean", "RPF Leu starvation")
+plot_RNA_Leu <- generate_plot(list$Leu, "RNA_mean", "RNA Leu starvation")
+
+plot_TE_Leu
+plot_RNA_Leu
+plot_RPF_Leu
+
+plot_TE_Triple <- generate_plot(list$Triple, "TE_mean", "TE Triple starvation")
+plot_RPF_Triple <- generate_plot(list$Triple, "RPF_mean", "RPF Triple starvation")
+plot_RNA_Triple <- generate_plot(list$Triple, "RNA_mean", "RNA Triple starvation")
+
+plot_TE_Triple
+plot_RNA_Triple
+plot_RPF_Triple
+
+plot_TE_Double <- generate_plot(list$Double, "TE_mean", "TE Double starvation")
+plot_RPF_Double <- generate_plot(list$Double, "RPF_mean", "RPF Double starvation")
+plot_RNA_Double <- generate_plot(list$Double, "RNA_mean", "RNA Double starvation")
+
+plot_TE_Double
+plot_RNA_Double
+plot_RPF_Double
+
+plot_TE_Ile
+plot_TE_Val
+plot_RNA_Ile
+plot_RNA_Val
+plot_RPF_Ile
+plot_RPF_Val
+
+# Arrange TE plots
+figure_TE <- arrangeGrob(
+  plot_TE_Leu,
+  plot_TE_Ile,
+  plot_TE_Val,
+  plot_TE_Double,
+  plot_TE_Triple,
+  ncol = 5
+)
+
+# Arrange RNA plots
+figure_RNA <- arrangeGrob(
+  plot_RNA_Leu,
+  plot_RNA_Ile,
+  plot_RNA_Val,
+  plot_RNA_Double,
+  plot_RNA_Triple,
+  ncol = 5
+)
+
+# Arrange RPF plots
+figure_RPF <- arrangeGrob(
+  plot_RPF_Leu,
+  plot_RPF_Ile,
+  plot_RPF_Val,
+  plot_RPF_Double,
+  plot_RPF_Triple,
+  ncol = 5
+)
+
+
+ggsave("./Features/TE_plots_cpm_ctrl.png", figure_TE, width = 20, height = 3)
+ggsave("./Features/RNA_plots_cpm_ctrl.png", figure_RNA, width = 20, height = 3)
+ggsave("./Features/RPF_plots_cpm_ctrl.png", figure_RPF,width = 20, height = 3)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

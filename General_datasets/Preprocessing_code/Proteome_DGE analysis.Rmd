@@ -1,0 +1,78 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(readxl)
+Proteome_raw <- read_excel("../General_datasets/Proteome_raw.xlsx")
+
+library(edgeR)
+library(dplyr)
+
+Proteome_raw <- Proteome_raw %>%
+  group_by(Gene.Symbol) %>%
+  summarise(across(everything(), mean, na.rm = TRUE), .groups = "drop")
+
+gene_counts <- Proteome_raw %>% 
+  select(-Gene.Symbol)
+rownames(gene_counts) <- Proteome_raw$Gene.Symbol
+
+group <- factor(c(
+  rep("Ctrl", 3),    
+  rep("Leu", 3),     
+  rep("Ile", 3),     
+  rep("Val", 3),    
+  rep("Double", 2), 
+  rep("Triple", 3)
+))
+
+dge <- DGEList(counts = gene_counts, group = group)
+dge <- calcNormFactors(dge)
+
+design <- model.matrix(~ 0 + group)
+colnames(design) <- levels(group)
+dge <- estimateDisp(dge, design)
+fit <- glmQLFit(dge, design)
+
+contrasts <- list(
+  Leu = makeContrasts(Leu - Ctrl, levels = design),
+  Ile = makeContrasts(Ile - Ctrl, levels = design),
+  Val = makeContrasts(Val - Ctrl, levels = design),
+  Double = makeContrasts(Double - Ctrl, levels = design),
+  Triple = makeContrasts(Triple - Ctrl, levels = design)
+)
+
+
+qlf_results <- lapply(contrasts, function(contrast) glmQLFTest(fit, contrast = contrast))
+
+
+results <- lapply(qlf_results, function(res) {
+  topTags(res, n = Inf, adjust.method = "BH", sort.by = "none")$table
+})
+
+final_results <- bind_rows(
+  lapply(names(results), function(cond) {
+    res <- results[[cond]]
+    res$Condition <- cond
+    res$Gene <- rownames(res)
+    return(res)
+  }),
+  .id = "Comparison"
+)
+
+final_results <- final_results %>%
+  select(Gene, Condition, logFC, PValue, FDR) %>%
+  arrange(Gene, Condition)
+
+Proteome_logFC <- final_results %>%
+  pivot_wider(
+    id_cols = Gene,
+    names_from = Condition,
+    values_from = c(logFC, PValue),
+    names_glue = "Proteome_{Condition}_{.value}"
+  )
+
+save(file="../General_datasets/Proteome_logFC.RData", Proteome_logFC)
+```
+

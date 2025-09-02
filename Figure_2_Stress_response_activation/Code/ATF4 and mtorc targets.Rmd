@@ -1,0 +1,456 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-07-04"
+---
+```{r}
+library(ggrepel)
+library(ggplot2)
+library(dplyr)
+
+#Unique-mapping
+#load("../../General_datasets/log2CPMs.RData" )
+#load("../../General_datasets/log2FC_pValue.RData")
+
+#multi-mapping
+load("../../General_datasets/log2CPMs_MM.RData" )
+load("../../General_datasets/log2FC_pValue_MM.RData")
+EdgeR_all <- EdgeR_all_MM
+cpm_all <- cpm_all_MM
+
+
+Atf4 <- read.xlsx("../Data/Atf4_targets.xlsx")
+mTorc <- read.xlsx("../Data/mTORC_targets.xlsx")
+
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggsignif)
+library(pheatmap)
+
+
+
+# Boxplot
+create_boxplot <- function(EdgeR_all, gene_df, title, measure, significance_threshold = 0.05) {
+  width <- 3 
+  height<- 3
+  
+  EdgeR_all$Gene_lower <- tolower(EdgeR_all$Gene)
+  gene_df$Gene_symbol_lower <- tolower(gene_df$Gene_symbol)
+
+EdgeR_all$TE_Ctrl_logFC <- 0
+EdgeR_all$RNA_Ctrl_logFC <- 0
+EdgeR_all$RPF_Ctrl_logFC <- 0
+  
+  filtered_genes <- EdgeR_all[EdgeR_all$Gene_lower %in% gene_df$Gene_symbol_lower, ]
+  selected_columns <- grep(paste0("^", measure, ".*_logFC$"), colnames(filtered_genes), value = TRUE)
+  boxplot_data <- filtered_genes[, c("Gene", selected_columns)]
+  
+  plot_data <- boxplot_data %>%
+    pivot_longer(cols = starts_with(measure), names_to = "Condition", values_to = "logFC") %>%
+    mutate(Condition = gsub(paste0(measure, "_|_logFC"), "", Condition),
+           Condition = factor(Condition, levels = c("Ctrl", "Leu", "Ile", "Val", "Double", "Triple")))
+  
+  max_value <- max(plot_data$logFC, na.rm = TRUE)
+  y_limit <- max_value+3
+  
+ p <- ggplot(plot_data, aes(x = Condition, y = logFC)) +
+    geom_boxplot(outlier.shape = NA) +
+    stat_summary(fun = mean, geom = "point", shape = 21, size = 3, fill = "red", color = "black") +
+    labs(title = title, y = paste0("log2FC ", measure), x = "Condition") +
+    theme_classic(base_family = "Arial") +
+     theme(
+        text = element_text(family = "Arial", size = 14, color = "black"),  # Global text settings
+        plot.title = element_text(size = 12, color = "black", hjust = 0.5),  # Title
+        axis.title = element_text(size = 12, color = "black"),  # Axis titles
+        axis.text = element_text(size = 12, color = "black"),  # Axis labels
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 12, color = "black"),  # Rotate x-axis labels
+        legend.title = element_text(size = 10, color = "black"),  # Legend title
+        legend.text = element_text(size = 10, color = "black")  # Legend labels
+    ) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    coord_cartesian(ylim = c(NA, 1))
+  
+
+  
+  conditions <- c("Ctrl","Leu", "Ile", "Val", "Double", "Triple")
+  comparisons <- combn(conditions, 2, simplify = FALSE)
+  significant_comparisons <- list()
+  y_positions <- seq(max_value + 0.5, by = 0.5, length.out = length(comparisons))
+  
+  for (i in seq_along(comparisons)) {
+    comp <- comparisons[[i]]
+    comp_data <- plot_data %>% filter(Condition %in% comp)
+    p_val <- t.test(logFC ~ Condition, data = comp_data)$p.value
+    if (p_val < significance_threshold) {
+      significant_comparisons[[i]] <- comp
+      p <- p + geom_signif(comparisons = list(comp), y_position = seq(max_value + 0.5, by = 0.5, length.out = length(comparisons))[i],
+                           annotations = ifelse(p_val < 0.001, "***", ifelse(p_val < 0.01, "**", "*")),
+                           textsize = 3)
+    }
+  }
+  
+  ggsave(paste0("../Figures/", title, "_boxplotMM.png"), p, width = width, height = height)
+  #save(p, file = paste0("../Figures/", title, "_boxplot.RData"))
+  return(p)
+}
+
+# Heatmap
+create_heatmap <- function(EdgeR_all, gene_df, measure, k = 10, title) {
+  width <- 3 
+  height<- 4
+
+  heatmap_data <- EdgeR_all %>%
+    mutate(Gene_lower = tolower(Gene)) %>%
+    inner_join(gene_df %>% mutate(Gene_symbol_lower = tolower(Gene_symbol)), 
+               by = c("Gene_lower" = "Gene_symbol_lower")) %>%
+    select(Gene, matches(paste0("^", measure, ".*_logFC$"))) %>%
+    drop_na() %>%
+    distinct(Gene, .keep_all = TRUE)
+  
+  log2FC_matrix <- heatmap_data %>% select(-Gene) %>% as.matrix()
+  kmeans_result <- kmeans(log2FC_matrix, centers = k)
+  heatmap_data$cluster <- kmeans_result$cluster
+  
+  heatmap_data_long <- heatmap_data %>%
+    pivot_longer(cols = starts_with(measure), names_to = "Condition", values_to = "log2FC") %>%
+    mutate(Condition = gsub(paste0(measure, "_|_logFC"), "", Condition),
+           Condition = factor(Condition, levels = c("Leu", "Ile", "Val", "Double", "Triple")),
+           Gene = factor(Gene, levels = heatmap_data$Gene[order(heatmap_data$cluster)]))
+  
+ p <- ggplot(heatmap_data_long, aes(x = Condition, y = Gene, fill = log2FC)) +
+    geom_tile() +
+    scale_fill_gradient2(low = "darkblue", mid = "white", high = "darkred", midpoint = 0) +
+    theme_classic(base_family = "Arial") +
+    theme(
+        text = element_text(size = 14, color = "black"),        
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 14, color = "black"),
+        axis.text.y = element_blank(),    
+        axis.title = element_text(size = 14, color = "black"),   
+        axis.ticks = element_line(color = "black"),              
+        axis.line = element_line(color = "black"),               
+        legend.text = element_text(size = 10, color = "black"),  
+        legend.title = element_text(size = 10, color = "black"),
+        legend.position = "top"
+    )
+  
+  ggsave(paste0("../Figures/", title, "_heatmapMM.png"), p, width = width, height = height)
+#  save(p, file = paste0("../Figures/", title, "_heatmap.RData"))
+  
+  return(p)
+}
+
+
+# Usage
+Atf4_TE <- create_boxplot(EdgeR_all, Atf4, "Atf4 Targets - TE", measure = "TE")
+Atf4_RNA <- create_boxplot(EdgeR_all, Atf4, "Atf4 Targets - RNA", measure = "RNA")
+Atf4_RPF <- create_boxplot(EdgeR_all, Atf4, "Atf4 Targets - RPF", measure = "RPF")
+Atf4_Heatmap_TE <- create_heatmap(EdgeR_all, Atf4, measure = "TE", k = 12, "Atf4 Targets - TE")
+Atf4_Heatmap_RNA <- create_heatmap(EdgeR_all, Atf4, measure = "RNA", k = 12, "Atf4 Targets - RNA")
+Atf4_Heatmap_RPF <- create_heatmap(EdgeR_all, Atf4, measure = "RPF", k = 12, "Atf4 Targets - RPF")
+
+
+
+mTorc_filter <- mTorc %>%
+  filter(Class == "Known_TOP")
+
+mTorc_RPF_top <- create_boxplot(EdgeR_all, mTorc_filter, "mTorc Targets - RPF", measure = "RPF")
+mTorc_RNA_top <- create_boxplot(EdgeR_all, mTorc_filter, "mTorc Targets - RNA", measure = "RNA")
+mTorc_TE_top <- create_boxplot(EdgeR_all, mTorc_filter, "mTorc Targets - TE", measure = "TE")
+mTorc_Heatmap_TE_top <- create_heatmap(EdgeR_all, mTorc_filter, measure = "TE", k = 12, "mTorc Targets - TE")
+mTorc_Heatmap_RNA_top <- create_heatmap(EdgeR_all, mTorc_filter, measure = "RNA", k = 12, "mTorc Targets - RNA")
+mTorc_Heatmap_RPF_top <- create_heatmap(EdgeR_all, mTorc_filter, measure = "RPF", k = 12, "mTorc Targets - RPF")
+
+Ribosome_filtered <- EdgeR_all %>%
+  filter(str_starts(Gene, "Rpl") | str_starts(Gene, "Rps")) %>%
+  select(Gene_symbol = Gene) 
+
+RPs_RPF <- create_boxplot(EdgeR_all, Ribosome_filtered, "Rpl/s - RPF", measure = "RPF")
+RPs_RNA <- create_boxplot(EdgeR_all, Ribosome_filtered, "Rpl/s - RNA", measure = "RNA")
+RPs_TE <- create_boxplot(EdgeR_all, Ribosome_filtered, "Rpl/s - TE", measure = "TE")
+RPs_Heatmap_TE <- create_heatmap(EdgeR_all, Ribosome_filtered, measure = "TE", k = 12, "Rpl/s - TE")
+RPs_Heatmap_RNA <- create_heatmap(EdgeR_all, Ribosome_filtered, measure = "RNA", k = 12, "Rpl/s - RNA")
+RPs_Heatmap_RPF <- create_heatmap(EdgeR_all, Ribosome_filtered, measure = "RPF", k = 12, "Rpl/s - RPF")
+
+```
+
+
+
+#RPF counts on specific genes across conditions
+```{r}
+load("../../General_datasets/log2CPMs.RData" )
+
+library(ggplot2)
+library(dplyr)
+library(ggsignif)
+library(tidyr)
+library(purrr)
+library(stringr)
+
+create_plot <- function(gene_symbol, data, filename, prefix = "RPF_") {
+  gene_data <- data %>% filter(gene_symbol == !!gene_symbol)
+  
+  plot_data <- gene_data %>%
+    select(starts_with(prefix)) %>%
+    pivot_longer(cols = everything(), names_to = "Condition", values_to = "Value") %>%
+    mutate(Condition = sub(paste0("^", prefix), "", Condition)) %>%
+    mutate(Condition = sub("_\\d+$", "", Condition)) %>%
+    group_by(Condition) %>%
+    mutate(n = row_number()) %>%
+    ungroup() %>%
+    mutate(Condition = factor(Condition, levels = c("Ctrl", "Leu", "Ile", "Val", "Double", "Triple")))
+  
+  # Calculate limits for y-axis and position for significance annotations
+  max_value <- max(plot_data$Value, na.rm = TRUE)
+  y_limit <- max_value + 2
+  
+  # Generate comparisons and filter for significant p-values
+  comparisons <- combn(levels(plot_data$Condition), 2, simplify = FALSE)
+  significant_comparisons <- comparisons %>%
+    map(~t.test(Value ~ Condition, data = plot_data %>% filter(Condition %in% .x))$p.value) %>%
+    setNames(map_chr(comparisons, paste, collapse = "-")) %>%
+    keep(~. < 0.05) %>%
+    names() %>%
+    str_split("-") %>%
+    map(~.x)
+  
+  # Create the plot
+  p <- ggplot(plot_data, aes(x = Condition, y = Value)) +
+    geom_point(position = position_jitter(width = 0.2), size = 3, alpha = 0.7) +
+    labs(title = paste(prefix, "Values for", gene_symbol), y = "cpm [log2]", x = "") +
+    theme_classic(base_family = "Arial") +
+    theme(
+      plot.background = element_rect(fill = "transparent", colour = NA),
+      panel.background = element_rect(fill = "transparent", colour = NA),
+      axis.ticks = element_line(colour = "black"),
+      axis.title = element_text(size = 14, face = "plain", color = "black"),
+      axis.text = element_text(size = 14, face = "plain", color = "black", angle = 90),
+      legend.title = element_text(size = 14, color = "black", face = "plain"),
+      legend.background = element_rect(fill = "transparent", colour = NA),
+      legend.text = element_text(size = 14, color = "black", face = "plain"),
+      plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")
+    ) +
+    scale_y_continuous(limits =c(NA, y_limit) )
+  
+#  if (length(significant_comparisons) > 0) {
+#    p <- p + geom_signif(
+#      comparisons = significant_comparisons,
+#      map_signif_level = TRUE,
+#      test = "t.test",
+#      textsize = 3,
+#      y_position = annotation_positions[1:length(significant_comparisons)]
+#    )
+#  }
+  
+  ggsave(filename, plot = p, device = "svg", width = 3, height = 3)
+    ggsave(filename, plot = p, device = "tiff", width = 3, height = 3)
+  return(p)
+}
+
+# Generate plots for RPF data
+RPF_Counts_Atf4 <- create_plot("Atf4", cpm_all, "../Figures/RPF_Counts_Atf4.svg", prefix = "RPF_")
+RPF_Counts_chop <- create_plot("Ddit3", cpm_all, "../Figures/RPF_Counts_chop.svg", prefix = "RPF_")
+RPF_Counts_Rpl27 <- create_plot("Rps9", cpm_all, "../Figures/RPF_Counts_Rpl27.png", prefix = "RPF_")
+
+save(RPF_Counts_Atf4, file = "../Figures/RPF_Counts_Atf4.RData")
+save(RPF_Counts_chop, file = "../Figures/RPF_Counts_chop.RData")
+
+# Generate plots for RNA data
+RNA_Counts_Atf4 <- create_plot("Atf4", cpm_all, "../Figures/RNA_Counts_Atf4.svg", prefix = "RNA_")
+RNA_Counts_chop <- create_plot("Ddit3", cpm_all, "../Figures/RNA_Counts_chop.svg", prefix = "RNA_")
+RNA_Counts_Rpl27 <- create_plot("Rps9", cpm_all, "../Figures/RNA_Counts_Rpl27.png", prefix = "RNA_")
+
+RNA_Counts_Atf4 <- create_plot("Atf4", cpm_all, "../Figures/RNA_Counts_Atf4.tiff", prefix = "RNA_")
+RNA_Counts_chop <- create_plot("Ddit3", cpm_all, "../Figures/RNA_Counts_chop.tiff", prefix = "RNA_")
+
+save(RNA_Counts_Atf4, file = "../Figures/RNA_Counts_Atf4.RData")
+save(RNA_Counts_chop, file = "../Figures/RNA_Counts_chop.RData")
+
+```
+
+
+
+
+
+```{r}
+load("../Figures/RNA_Counts_Atf4.RData")
+load("../Figures/RPF_Counts_Atf4.RData")
+load("../Figures/RNA_Counts_chop.RData")
+load("../Figures/RPF_Counts_chop.RData")
+
+RNA_Counts_Atf4 <- as.data.frame(RNA_Counts_Atf4$data)
+RPF_Counts_Atf4 <- as.data.frame(RPF_Counts_Atf4$data)
+RNA_Counts_chop <- as.data.frame(RNA_Counts_chop$data)
+RPF_Counts_chop <- as.data.frame(RPF_Counts_chop$data)
+
+RNA_Counts_Atf4$Type <- "RNA-seq"
+RPF_Counts_Atf4$Type <- "Ribo-seq"
+RNA_Counts_chop$Type <- "RNA-seq"
+RPF_Counts_chop$Type <- "Ribo-seq"
+
+# Combine data
+plot_data_Atf4 <- bind_rows(RNA_Counts_Atf4, RPF_Counts_Atf4)
+plot_data_chop <- bind_rows(RNA_Counts_chop, RPF_Counts_chop)
+
+plot_combined <- function(plot_data, gene_symbol) {
+  ggplot(plot_data, aes(x = Condition, y = Value, color = Type, shape = Type, fill = Type)) +  
+    geom_point(position = position_jitter(width = 0.2), size = 3, alpha = 0.7, stroke = 1, color = "black") + 
+    labs(title = paste("Expression Levels for", gene_symbol), y = "RPM [log2]", x = "") +
+    theme_classic(base_family = "Arial") +
+    theme(
+      plot.background = element_rect(fill = "transparent", colour = NA),
+      panel.background = element_rect(fill = "transparent", colour = NA),
+      axis.ticks = element_line(colour = "black"),
+      axis.title = element_text(size = 12, face = "plain", color = "black"),
+      axis.text = element_text(size = 12, face = "plain", color = "black"),
+      axis.text.x = element_text(size = 12, face = "plain", color = "black", angle = 90),
+      legend.title = element_text(size = 12, color = "black", face = "plain"),
+      legend.background = element_rect(fill = "transparent", colour = NA),
+      legend.text = element_text(size = 12, color = "black", face = "plain"),
+      plot.title = element_text(size = 12, face = "plain", hjust = 0.5, color = "black"),
+      legend.position = "top"
+    ) +
+    scale_fill_manual(values = c("RNA-seq" = "gray", "Ribo-seq" = "black")) + 
+    scale_shape_manual(values = c("RNA-seq" = 21, "Ribo-seq" = 24))  
+}
+
+
+
+# Generate plots
+plot_Atf4 <- plot_combined(plot_data_Atf4, "Atf4")
+plot_Chop <- plot_combined(plot_data_chop, "Chop")
+
+library(patchwork)
+combined_plot <- plot_Atf4 + plot_Chop + 
+  plot_layout(guides = "collect") & theme(legend.position = "bottom")
+
+ggsave("../Figures/combined_plot_counts.tiff", plot = combined_plot, device = "tiff", width = 5, height = 4)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Enrichemnt for specific Amino acids or codons
+```{r}
+library(ggrepel)
+library(ggplot2)
+library(dplyr)
+library(openxlsx)
+
+load("../0. General Data/codon_counts_LNorm_mouse.RData")
+
+EdgeR_all <- read.xlsx("../0. General Data/log2FC_pValue.xlsx")
+Atf4 <- read.xlsx("../2. Atf4_mTorc target regulation/Atf4_targets.xlsx")
+mTorc <- read.xlsx("../2. Atf4_mTorc target regulation/mTORC_targets.xlsx")
+
+Atf4 <- Atf4 %>%
+  mutate(Atf4_targets = Gene_symbol) %>%
+  filter(tolower(Atf4_targets) %in% tolower(EdgeR_all$Gene))
+mTorc <- mTorc %>%
+  mutate(Gene_symbol = mTORC_targets) %>%
+  filter(tolower(mTORC_targets) %in% tolower(EdgeR_all$Gene))
+
+EdgeR_genes <- tolower(EdgeR_all$Gene)
+Atf4_genes <- tolower(Atf4$Atf4_targets)
+mTorc_genes <- tolower(mTorc$mTORC_targets)
+
+# Function to calculate mean codon content
+calculate_mean_codon_content <- function(codon_data, gene_list, group_name) {
+ filtered_data <- codon_data %>%
+    filter(tolower(Gene) %in% gene_list) %>%
+    select(-Gene, -Val_score, -Ile_score, -Leu_score)
+ 
+  mean_data <- filtered_data %>%
+    summarise(across(everything(), mean, na.rm = TRUE))
+  
+  filtered_data <- mean_data %>%
+    pivot_longer(cols = everything(), names_to = "Codon", values_to = "Mean_Content") %>%
+    mutate(Group = group_name)
+  
+  return(filtered_data)
+ 
+ }
+
+codon_content_edger <- calculate_mean_codon_content(codons, EdgeR_genes, "EdgeR_all")
+codon_content_atf4 <- calculate_mean_codon_content(codons, Atf4_genes, "Atf4")
+codon_content_mtorc <- calculate_mean_codon_content(codons, mTorc_genes, "mTorc")
+
+codon_content_all <- bind_rows(codon_content_edger, codon_content_atf4, codon_content_mtorc)
+
+# Visualization
+Content <- ggplot(codon_content_all, aes(x = Codon, y = Mean_Content, fill = Group)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  labs(
+    title = "Mean Codon Content Across Groups",
+    x = "Codon",
+    y = "Mean Codon Content",
+    fill = "Group"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, color = "black"),
+    text = element_text(family = "Arial", color = "black"),
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  )
+
+
+```
+```{r}
+intersect(tolower(sets_genes$Val), Atf4_genes)
+intersect(tolower(sets_genes$Val), mTorc_genes)
+
+```
+

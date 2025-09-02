@@ -1,0 +1,89 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-05-16"
+---
+
+```{r}
+load(file="../../General_datasets/datatable_Riboseq_normalized.RData")
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(extrafont)
+codon_sets <- list(
+  ile_codons = c("AUA", "AUC", "AUU"),
+  val_codons = c("GUA", "GUC", "GUG", "GUU"),
+  leu_codons = c("CUA", "CUC", "CUG", "CUU", "UUA", "UUG"))
+
+data_start <- data %>%
+  filter(normalized_position <20)
+
+data_end <- data %>%
+  filter(normalized_position >80)
+
+codons_of_interest <- codon_sets$val_codons
+condition_of_interest <- "VAL"
+
+codon_name <- names(codon_sets)[sapply(codon_sets, identical, codons_of_interest)]
+plot_name <- paste0("densities_",tolower(condition_of_interest), "_", tolower(codon_name))
+
+# Calculate the baseline Norm_RPM for the CTRL condition
+ctrl_data <- data_end %>%
+  filter(codons %in% codons_of_interest, condition == "CTRL") %>%
+  dplyr::select(gene_symbol, position, Sample, codons) %>%
+  distinct() %>%
+  rowwise() %>%
+  do({
+    data.frame(position = .[["position"]] + (-100:100), 
+               gene_symbol = .[["gene_symbol"]], 
+               Sample = .[["Sample"]],
+               codon_0 = rep(.$codons, 201),
+               relative_position = (-100:100))
+  }) %>%
+  left_join(data_end, by = c("position", "gene_symbol", "Sample")) %>%
+  na.omit() %>%
+  group_by(codon_0, relative_position) %>%
+  summarize(ctrl_mean_Norm_RPM = mean(Norm_RPM, na.rm = TRUE), .groups = 'drop')
+
+# Process the data for the specific condition and calculate relative values
+summary <- data_end %>%
+  filter(codons %in% codons_of_interest, condition == condition_of_interest) %>%
+  dplyr::select(gene_symbol, position, Sample, codons) %>%
+  distinct() %>%
+  rowwise() %>%
+  do({
+    data.frame(position = .[["position"]] + (-100:100), 
+               gene_symbol = .[["gene_symbol"]], 
+               Sample = .[["Sample"]],
+               codon_0 = rep(.$codons, 201),
+               relative_position = (-100:100))
+  }) %>%
+  left_join(data_end, by = c("position", "gene_symbol", "Sample")) %>%
+  na.omit() %>%
+  left_join(ctrl_data, by = c("codon_0", "relative_position")) %>%
+  mutate(relative_Norm_RPM = Norm_RPM / ctrl_mean_Norm_RPM) %>%
+  group_by(codon_0, relative_position) %>%
+  summarize(log2FC_RPM = log2(mean(relative_Norm_RPM, na.rm = TRUE)), .groups = 'drop')
+
+plot_object <-  ggplot(summary, aes(x = relative_position, y = log2FC_RPM, color = codon_0)) +
+  geom_line(size = 1.2) +  
+  labs(title = paste0("Starvation: ", condition_of_interest),
+       x = "Distance from codon [nt]",
+       y = "Mean RPM [AA limitation - Ctrl; log2]", color = NULL) +
+  theme_classic(base_size = 14) +  
+  theme(text = element_text(family = "Arial"),
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 16), 
+        axis.text = element_text(color = "black", size = 12),  
+        axis.title = element_text(color = "black", size = 14),  
+        legend.position = "top",  
+        legend.title = element_blank(),  
+        legend.text = element_text(size = 10)) + 
+  ylim(-0.2,1.5)+
+  scale_color_viridis_d(begin = 0.1, end = 0.9)
+
+assign(plot_name, plot_object)
+```
+

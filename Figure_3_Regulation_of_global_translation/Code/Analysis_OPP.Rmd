@@ -1,0 +1,330 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(RColorBrewer)
+
+data <- read_excel("../Data/OPP_Raw files & Overview/All_samples.xlsx", 
+    sheet = "Sheet1")
+data <- na.omit(data)
+data <- data %>%
+  filter(Date != 4)
+```
+
+**local background substraction, normalization (to untreated) & Outlier removal**
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(RColorBrewer)
+
+# Substract local background
+data <- data %>%
+  mutate(norm_TAMRA = TAMRA_mean-TAMRA_min)
+
+# Substract unstained
+unstained_means <- data %>%
+  group_by(Starvation, Treatment) %>%
+  summarize(mean_unstained = mean(norm_TAMRA, na.rm = TRUE)) %>%
+  ungroup()%>%
+  filter(Starvation == "unstained")
+data$norm_TAMRA <- data$norm_TAMRA - unstained_means$mean_unstained
+
+#Remove Outliers
+data <- data %>%
+  group_by(Starvation, Treatment, Well) %>%
+  mutate(
+    Q1 = quantile(norm_TAMRA, 0.25),
+    Q3 = quantile(norm_TAMRA, 0.75),
+    IQR = Q3 - Q1,
+    lower_bound = Q1 - 1.5 * IQR,
+    upper_bound = Q3 + 1.5 * IQR
+  ) %>%
+  filter(norm_TAMRA >= lower_bound & norm_TAMRA <= upper_bound) %>%
+  select(-Q1, -Q3, -IQR, -lower_bound, -upper_bound) %>%
+  ungroup()
+
+
+#Normalization of replicates
+ctrl_means <- data %>%
+  group_by(Starvation, Treatment, Time) %>%
+  summarize(means = mean(norm_TAMRA, na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(Starvation == "Ctrl" & Treatment %in% c("untreated") & Time %in% c("3h", "6h", "24h"))
+
+data <- merge(data, ctrl_means[, c("means", "Time")], by = c("Time"))
+data$norm_TAMRA <- data$norm_TAMRA / data$means
+
+data_means <- data %>%
+  group_by(Starvation, Treatment, Time) %>%
+  summarize(norm_TAMRA = mean(norm_TAMRA, na.rm = TRUE)) %>%
+  ungroup()
+
+```
+
+
+##Control graphs
+```{r}
+library(ggplot2)
+library(dplyr)
+
+ctrl_data <- data %>%
+   filter((Starvation == "Ctrl" & Treatment == "CHX") |
+         (Starvation == "unstained" & Treatment == "untreated")|
+           (Starvation == "Ctrl"& Treatment=="untreated" & Time == "6h")) %>%
+  mutate(Name = case_when(
+    Starvation == "Ctrl" & Treatment == "CHX" ~ "CHX",
+    Starvation == "unstained" & Treatment == "untreated" ~ "unstained",
+    Starvation == "Ctrl" & Treatment == "untreated" & Time == "6h" ~ "Ctrl"
+  ))
+
+# Set the order of the factors
+ctrl_data$Name <- factor(ctrl_data$Name, levels = c("Ctrl", "CHX", "unstained"))
+
+grouped <- ctrl_data %>%
+  group_by(Name) %>%
+  summarize(Mean = mean(norm_TAMRA), SEM = sd(norm_TAMRA) / sqrt(n()), Count = n())
+
+t_test_results <- pairwise.t.test(ctrl_data$norm_TAMRA, interaction(ctrl_data$Name), p.adjust.method = "bonferroni")
+p_values_controls <- t_test_results$p.value
+pval_to_stars <- function(pval) {
+  if (is.na(pval)) return("")
+  if (pval < 0.001) return("***")
+  if (pval < 0.01) return("**")
+  if (pval < 0.05) return("*")
+  return("")
+}
+p_values_stars <- apply(p_values_controls, c(1,2), pval_to_stars)
+
+annotations <- data.frame(
+  x = c("Ctrl", "Ctrl"),
+  xend = c("CHX", "unstained"),
+  y = c(3.5, 3.8),
+  label = c(p_values_stars["CHX", "Ctrl"], p_values_stars["unstained", "Ctrl"])
+)
+
+# Violin Plot
+violin_OPP_controls <- ggplot(ctrl_data, aes(x = Name, y = norm_TAMRA)) +
+  geom_jitter(alpha = 0.2, size = 0.5, position=position_jitter(0.2)) +
+  geom_boxplot(width = 0.5, outlier.shape = NA, position = position_dodge(width = 0.9), alpha = 0.7) +
+  stat_summary(aes(), fun=mean, geom="point", shape=20, size=3, color="red", position = position_dodge(width = 0.5)) +
+#  geom_segment(data = annotations, aes(x = x, xend = xend, y = (y-0.05), yend = (y-0.05)), 
+#               linetype = "dashed", colour = "black", size = 0.8) +
+#  geom_text(data = annotations, aes(x = c(1.5, 2), y = y, label = label), vjust = 0.2, size = 3) +
+  theme_classic() + 
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), # Rotate x-axis labels
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")) +
+  labs(
+    x = "Deprivation",
+    y = "Relative MFI",
+    fill = "Time")+
+  scale_y_continuous(limits = c(-0.25, 4),
+                     breaks = seq(0, 3.5, by = 0.5))
+
+violin_OPP_controls
+
+ggsave("../Figures/violin_OPP_controls.svg", violin_OPP_controls, width = 2.5, height = 4, dpi = 300)
+ggsave("../Figures/violin_OPP_controls.tiff", violin_OPP_controls, width = 2.5, height = 4, dpi = 300)
+save(violin_OPP_controls, file = "../Figures/violin_OPP_controls.RData")
+
+```
+
+##untreated graphs
+```{r}
+library(ggplot2)
+library(dplyr)
+
+all_data <- data %>%
+           mutate(Starvation = ifelse(Treatment == "CHX", "CHX", Starvation), Condition = paste(Starvation, Treatment, sep = "_"))
+
+all_data <- all_data %>%
+           filter(Treatment %in% c("untreated", "ISRIB") & Time %in% c("6h") & Starvation %in% c("Ctrl", "Leu", "Ile", "Val", "Double", "Triple"))
+
+all_data$Time <- factor(all_data$Time, levels = c("3h", "6h", "24h"))
+all_data$Starvation <- factor(all_data$Starvation, levels = c("Ctrl", "Leu", "Ile", "Val", "Double", "Triple"))
+
+grouped <- all_data %>%
+  group_by(Starvation, Treatment, Time) %>%
+  summarize(Mean = mean(norm_TAMRA), SEM = sd(norm_TAMRA/ sqrt(n())), Count = n())
+grouped <- grouped %>%
+  mutate(y_pos = -0.15)
+
+t_test_results <- pairwise.t.test(all_data$norm_TAMRA,interaction(all_data$Starvation), p.adjust.method = "bonferroni")
+p_values <- t_test_results$p.value
+pval_to_stars <- function(pval) {
+  if (is.na(pval)) return("")
+  if (pval < 0.001) return("***")
+  if (pval < 0.01) return("**")
+  if (pval < 0.05) return("*")
+  return("")
+}
+p_values_stars <- apply(p_values, c(1,2), pval_to_stars)
+
+annotations <- data.frame(
+  x = c("Ctrl", "Ctrl", "Ctrl", "Ctrl", "Ctrl"),
+  xend = c("Leu", "Ile", "Val", "Double","Triple"),
+  y = c(3.6, 3.8, 4.0, 4.2, 4.4),
+  label = c(p_values_stars["Leu", "Ctrl"], p_values_stars["Ile", "Ctrl"], p_values_stars["Val", "Ctrl"],p_values_stars["Double", "Ctrl"], p_values_stars["Triple", "Ctrl"]))
+
+violin_untreated_OPP <- ggplot(all_data, aes(x = Starvation, y = norm_TAMRA)) +
+  geom_jitter(alpha = 0.1, size = 0.5, position = position_jitter(0.2)) +
+  geom_boxplot(width = 0.5, outlier.shape = NA, position = position_dodge(width = 0.9), alpha = 0.7) +
+  stat_summary(aes(), fun = mean, geom = "point", shape = 20, size = 3, color = "red", position = position_dodge(width = 0.9)) +
+#  geom_segment(data = annotations, aes(x = x, xend = xend, y = (y-0.05), yend = (y-0.05)), linetype = "dashed", colour = "black", size = 0.6) +
+#  geom_text(data = annotations, aes(x = c(1.5, 2, 2.5, 3, 3.5), y = y, label = label), vjust = 0.2, size = 3) +
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), # Rotate x-axis labels
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")
+  ) +
+  labs(
+    x = "Deprivation",
+    y = "Relative MFI",
+    fill = "Time"
+  ) +
+  scale_y_continuous(
+    limits = c(-0.15, 4.5),
+    breaks = seq(0, 4.5, by = 0.5)
+  )
+
+violin_untreated_OPP
+
+ggsave("../Figures/OPP_6h_untreated.svg",violin_untreated_OPP, width = 4, height = 4, dpi = 300)
+ggsave("../Figures/OPP_6h_untreated.tiff",violin_untreated_OPP, width = 4, height = 4, dpi = 300)
+save(violin_untreated_OPP, file = "../Figures/OPP_6h_untreated.RData")
+```
+
+## With ISRIB data per FOV
+```{r}
+all_data <- data %>%
+           mutate(Starvation = ifelse(Treatment == "CHX", "CHX", Starvation), Condition = paste(Starvation, Treatment, sep = "_"))
+
+all_data <- all_data %>%
+           filter(Treatment %in% c("untreated", "ISRIB_200") & Time %in% c("6h") & Starvation %in% c("Ctrl", "Leu", "Ile", "Val", "Double", "Triple"))
+
+all_data$Time <- factor(all_data$Time, levels = c("3h", "6h", "24h"))
+all_data$Starvation <- factor(all_data$Starvation, levels = c("Ctrl", "Leu", "Ile", "Val", "Double", "Triple"))
+all_data$Condition <- factor(all_data$Condition, levels = c("Ctrl_untreated","Ctrl_ISRIB_200", "Leu_untreated","Leu_ISRIB_200", "Ile_untreated","Ile_ISRIB_200", "Val_untreated","Val_ISRIB_200", "Double_untreated","Double_ISRIB_200", "Triple_untreated","Triple_ISRIB_200"))
+
+grouped_FOV <- all_data %>%
+  group_by(Starvation, Treatment, Condition, Field, Well) %>%
+  summarize(Mean = mean(norm_TAMRA), cell_count = n(), .groups = "drop")%>%
+  filter(cell_count > 10)
+
+grouped <- grouped_FOV %>%
+  group_by(Starvation, Treatment, Condition) %>%
+  summarize(Mean = mean(Mean), SEM = sd(Mean/ sqrt(n())), Count = n())
+
+grouped <- grouped %>%
+  mutate(y_pos = -0.15)
+
+t_test_results <- pairwise.t.test(all_data$norm_TAMRA,interaction(all_data$Condition))
+p_values <- t_test_results$p.value
+pval_to_stars <- function(pval) {
+  if (is.na(pval)) return("")
+  if (pval < 0.001) return("***")
+  if (pval < 0.01) return("**")
+  if (pval < 0.05) return("*")
+  return("NA")
+}
+p_values_stars <- apply(p_values, c(1,2), pval_to_stars)
+
+annotations <- data.frame(
+  x = c("Ctrl_untreated", "Ctrl_untreated", "Ctrl_untreated", "Ctrl_untreated", "Ctrl_untreated", "Ctrl_untreated", "Ctrl_untreated", "Ctrl_untreated", "Ctrl_untreated", "Ctrl_untreated", "Ctrl_untreated"),
+  xend = c("Leu_untreated", "Ile_untreated", "Val_untreated", "Double_untreated","Triple_untreated", "Ctrl_ISRIB_200","Leu_ISRIB_200", "Ile_ISRIB_200", "Val_ISRIB_200", "Double_ISRIB_200","Triple_ISRIB_200"),
+  y = c(2, 2.2, 2.4, 2.6, 2.8, 3, 3.2, 3.4,3.6,3.8,4),
+  label = c(p_values_stars["Leu_untreated", "Ctrl_untreated"], p_values_stars["Ile_untreated", "Ctrl_untreated"], p_values_stars["Val_untreated", "Ctrl_untreated"],p_values_stars["Double_untreated", "Ctrl_untreated"], p_values_stars["Triple_untreated", "Ctrl_untreated"], p_values_stars["Ctrl_ISRIB_200", "Ctrl_untreated"], p_values_stars["Leu_ISRIB_200", "Ctrl_untreated"], p_values_stars["Ile_ISRIB_200", "Ctrl_untreated"],p_values_stars["Val_ISRIB_200", "Ctrl_untreated"], p_values_stars["Double_ISRIB_200", "Ctrl_untreated"], p_values_stars["Triple_ISRIB_200", "Ctrl_untreated"]))
+
+violin <- ggplot(all_data, aes(x = Condition, y = norm_TAMRA)) +
+  geom_jitter(alpha = 0.1, size = 0.5, position = position_jitter(0.2)) +
+  geom_boxplot(width = 0.5, outlier.shape = NA, position = position_dodge(width = 0.9), alpha = 0.7) +
+  stat_summary(aes(), fun = mean, geom = "point", shape = 20, size = 4, color = "red", position = position_dodge(width = 0.9)) +
+geom_segment(data = annotations, aes(x = x, xend = xend, y = y, yend = y), linetype = "dashed", colour = "black", size = 0.8) +
+  geom_text(data = annotations, aes(x = c(1.5, 2, 2.5, 3, 3.5,4 ,4.5,5,5.5,6,6.5), y = y, label = label), vjust = 0.2, size = 5) +
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), # Rotate x-axis labels
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")
+  ) +
+  labs(
+    x = "Deprivation",
+    y = "Relative TAMRA intensity [a.u.]",
+    title = "OPP incorporation: 6h untreated",
+    fill = "Time"
+  ) +
+  scale_y_continuous(
+    limits = c(-0.15, 4.4),
+    breaks = seq(0, 3.5, by = 0.5)
+  )
+
+violin
+
+ggsave("../2. OPP incorporation/Plots/6h_untreated_ISRIB.png", violin, width = 2.5, height = 4, dpi = 300)
+save(violin, file = "../2. OPP incorporation/Plots/violin_untreated_ISRIB.RData")
+
+
+
+colors <- c("untreated" = "gray", "ISRIB_200" = "blue")
+
+bar <- ggplot(grouped, aes(x = Condition, y = Mean, fill = Treatment)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9), width = 0.7) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2, position = position_dodge(width = 0.9)) +
+  scale_fill_manual(values = colors) +
+  theme_classic(base_family = "Arial") +
+  theme(
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    axis.ticks = element_line(colour = "black"),
+    axis.title = element_text(size = 14, face = "plain", color = "black"),
+    axis.text = element_text(size = 14, face = "plain", color = "black"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), # Rotate x-axis labels
+    legend.title = element_text(size = 14, color = "black", face = "plain"),
+    legend.text = element_text(size = 14, color = "black", face = "plain"),
+    plot.title = element_text(size = 14, face = "plain", hjust = 0.5, color = "black")
+  ) +
+  labs(
+    x = "Deprivation",
+    y = "Relative TAMRA intensity [a.u.]",
+    title = "OPP incorporation: 6h untreated",
+    fill = "Treatment"
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1.7),
+    breaks = seq(0, 1.7, by = 0.5)
+  )
+
+bar
+
+```
+
+
